@@ -1,0 +1,16 @@
+{
+  "name": "shortdrop-file-share",
+  "version": "1.0.0",
+  "description": "Fast file upload and short-link sharing website with file previews and QR codes",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "cloudflared": "^0.7.3",
+    "express": "^4.21.2",
+    "multer": "^2.4.0",
+    "qrcode": "^1.5.4"
+  }
+}

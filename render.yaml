@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: sera-drop
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: PUBLIC_URL
+        value: https://sera-drop.onrender.com
+      - key: DISABLE_TUNNEL
+        value: "true"

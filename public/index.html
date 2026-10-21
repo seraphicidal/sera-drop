@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>sera.drop — Upload & Share Files Instantly</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="container">
+    <header class="navbar">
+      <a href="/" class="brand">
+        <div class="brand-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+        </div>
+        <span>sera.drop</span>
+      </a>
+      <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+        <a id="publicUrlBadge" href="#" target="_blank" class="nav-badge" style="display: none; border-color: rgba(16, 185, 129, 0.45); color: #34d399; background: rgba(16, 185, 129, 0.1);">
+          ● Public Link Active
+        </a>
+        <span class="nav-badge">Up to 500 MB per file</span>
+      </div>
+    </header>
+
+    <section class="hero">
+      <h1>Drop a file, get a short link</h1>
+      <p>Upload any image, video, document, or archive and share it immediately with a short link and QR code.</p>
+    </section>
+
+    <main>
+      <div class="card">
+        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload file dropzone">
+          <input type="file" id="fileInput" hidden />
+          <div class="dropzone-icon">
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </div>
+          <h2>Drag & drop your file here</h2>
+          <p>or click to browse from your computer (you can also paste with Ctrl+V)</p>
+          <button type="button" class="btn btn-primary" id="browseBtn">Choose File</button>
+        </div>
+
+        <div id="progressWrapper" class="progress-wrapper">
+          <div class="progress-header">
+            <span id="progressFileName">Uploading...</span>
+            <span id="progressPercent">0%</span>
+          </div>
+          <div class="progress-track">
+            <div id="progressFill" class="progress-fill"></div>
+          </div>
+        </div>
+      </div>
+
+      
+      <div id="resultCard" class="card result-card">
+        <div>
+          <span class="badge-success">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            Ready to share
+          </span>
+          <h2 id="resultFileName" style="font-size: 1.3rem; word-break: break-all;">filename.ext</h2>
+          <p id="resultFileMeta" style="color: var(--text-secondary); font-size: 0.88rem; margin-top: 2px;">0 KB</p>
+
+          <div class="short-link-box">
+            <input type="text" id="resultShortUrl" class="short-link-input" readonly />
+            <button type="button" id="copyResultBtn" class="btn btn-primary">Copy Link</button>
+          </div>
+
+          <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px;">
+            <a id="openSharePageBtn" href="#" target="_blank" class="btn btn-secondary">
+              Open Share Page
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                <polyline points="15 3 21 3 21 9"/>
+                <line x1="10" y1="14" x2="21" y2="3"/>
+              </svg>
+            </a>
+            <a id="downloadQrBtn" href="#" download="shortdrop-qr.png" class="btn btn-secondary">
+              Download QR Code
+            </a>
+          </div>
+        </div>
+
+        <div class="qr-box">
+          <img id="resultQrImage" src="" alt="QR Code for short link" />
+          <span>Scan to open</span>
+        </div>
+      </div>
+
+      
+      <div class="section-header">
+        <h3>Shared Files</h3>
+        <span id="fileCountLabel" style="color: var(--text-secondary); font-size: 0.88rem;">0 files</span>
+      </div>
+      <div id="fileList" class="file-list"></div>
+    </main>
+  </div>
+
+  <div id="toast" class="toast">Copied to clipboard!</div>
+
+  <script>
+    const dropzone = document.getElementById('dropzone');
+    const fileInput = document.getElementById('fileInput');
+    const browseBtn = document.getElementById('browseBtn');
+    const progressWrapper = document.getElementById('progressWrapper');
+    const progressFileName = document.getElementById('progressFileName');
+    const progressPercent = document.getElementById('progressPercent');
+    const progressFill = document.getElementById('progressFill');
+
+    const resultCard = document.getElementById('resultCard');
+    const resultFileName = document.getElementById('resultFileName');
+    const resultFileMeta = document.getElementById('resultFileMeta');
+    const resultShortUrl = document.getElementById('resultShortUrl');
+    const copyResultBtn = document.getElementById('copyResultBtn');
+    const openSharePageBtn = document.getElementById('openSharePageBtn');
+    const downloadQrBtn = document.getElementById('downloadQrBtn');
+    const resultQrImage = document.getElementById('resultQrImage');
+
+    const fileList = document.getElementById('fileList');
+    const fileCountLabel = document.getElementById('fileCountLabel');
+    const toast = document.getElementById('toast');
+
+    let toastTimer = null;
+    function showToast(msg) {
+      toast.textContent = msg;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    function formatDate(iso) {
+      const d = new Date(iso);
+      return d.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    }
+
+    function getExtBadge(filename) {
+      const parts = (filename || '').split('.');
+      if (parts.length > 1) {
+        return parts.pop().slice(0, 4).toUpperCase();
+      }
+      return 'FILE';
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    const OWNED_STORAGE_KEY = 'sera_drop_owned_files';
+
+    function getOwnedFilesMap() {
+      try {
+        return JSON.parse(localStorage.getItem(OWNED_STORAGE_KEY) || '{}');
+      } catch {
+        return {};
+      }
+    }
+
+    function saveOwnedFileToken(code, deleteToken) {
+      if (!code || !deleteToken) return;
+      const map = getOwnedFilesMap();
+      map[code] = deleteToken;
+      localStorage.setItem(OWNED_STORAGE_KEY, JSON.stringify(map));
+    }
+
+    function removeOwnedFileToken(code) {
+      const map = getOwnedFilesMap();
+      delete map[code];
+      localStorage.setItem(OWNED_STORAGE_KEY, JSON.stringify(map));
+    }
+
+    async function copyText(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        showToast('Short link copied to clipboard!');
+      } catch {
+        const input = document.createElement('input');
+        input.value = text;
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand('copy');
+        document.body.removeChild(input);
+        showToast('Short link copied to clipboard!');
+      }
+    }
+
+    dropzone.addEventListener('click', (e) => {
+      if (e.target !== fileInput) {
+        fileInput.click();
+      }
+    });
+
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files.length > 0) {
+        uploadFile(fileInput.files[0]);
+        fileInput.value = '';
+      }
+    });
+
+    ['dragenter', 'dragover'].forEach((evt) => {
+      dropzone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.classList.add('drag-over');
+      });
+    });
+
+    ['dragleave', 'drop'].forEach((evt) => {
+      dropzone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.classList.remove('drag-over');
+      });
+    });
+
+    dropzone.addEventListener('drop', (e) => {
+      const files = e.dataTransfer.files;
+      if (files && files.length > 0) {
+        uploadFile(files[0]);
+      }
+    });
+
+    window.addEventListener('paste', (e) => {
+      const items = e.clipboardData?.files;
+      if (items && items.length > 0) {
+        uploadFile(items[0]);
+      }
+    });
+
+    function uploadFile(file) {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      progressFileName.textContent = `Uploading ${file.name}...`;
+      progressPercent.textContent = '0%';
+      progressFill.style.width = '0%';
+      progressWrapper.classList.add('active');
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload', true);
+      xhr.setRequestHeader('X-Requested-With', 'sera.drop');
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          progressPercent.textContent = `${pct}%`;
+          progressFill.style.width = `${pct}%`;
+        }
+      };
+
+      xhr.onload = () => {
+        progressWrapper.classList.remove('active');
+        if (xhr.status >= 200 && xhr.status < 300) {
+          const data = JSON.parse(xhr.responseText);
+          if (data.deleteToken) {
+            saveOwnedFileToken(data.code, data.deleteToken);
+          }
+          displayResult(data);
+          loadFiles();
+          showToast('File uploaded! Short link is ready.');
+        } else {
+          let errMsg = 'Upload failed';
+          try {
+            errMsg = JSON.parse(xhr.responseText).error || errMsg;
+          } catch {}
+          showToast(errMsg);
+        }
+      };
+
+      xhr.onerror = () => {
+        progressWrapper.classList.remove('active');
+        showToast('Network error while uploading file');
+      };
+
+      xhr.send(formData);
+    }
+
+    function displayResult(item) {
+      resultFileName.textContent = item.originalName;
+      resultFileMeta.textContent = `${formatBytes(item.size)} • Code: ${item.code}`;
+      resultShortUrl.value = item.shortUrl;
+      openSharePageBtn.href = `/s/${item.code}`;
+      resultQrImage.src = item.qrCodeDataUrl;
+      downloadQrBtn.href = item.qrCodeDataUrl;
+      downloadQrBtn.download = `qr-${item.code}.png`;
+      resultCard.classList.add('active');
+    }
+
+    copyResultBtn.addEventListener('click', () => {
+      copyText(resultShortUrl.value);
+    });
+
+    async function deleteFile(code) {
+      const owned = getOwnedFilesMap();
+      const token = owned[code] || '';
+      const headers = { 'X-Requested-With': 'sera.drop' };
+      if (token) {
+        headers['X-Delete-Token'] = token;
+      }
+      const res = await fetch(`/api/files/${encodeURIComponent(code)}`, {
+        method: 'DELETE',
+        headers
+      });
+      if (res.ok) {
+        removeOwnedFileToken(code);
+        showToast('File removed');
+        loadFiles();
+      } else {
+        showToast('Unauthorized to delete this file');
+      }
+    }
+
+    async function loadFiles() {
+      try {
+        const ownedCodes = Object.keys(getOwnedFilesMap());
+        const query = ownedCodes.length ? `?codes=${encodeURIComponent(ownedCodes.join(','))}` : '';
+        const res = await fetch(`/api/files${query}`);
+        const files = await res.json();
+        fileCountLabel.textContent = `${files.length} ${files.length === 1 ? 'file' : 'files'}`;
+
+        if (files.length === 0) {
+          fileList.innerHTML = `
+            <div class="card" style="text-align: center; color: var(--text-secondary); padding: 32px;">
+              No shared files yet. Upload a file above to generate your first short link!
+            </div>
+          `;
+          return;
+        }
+
+        fileList.innerHTML = '';
+        const execExts = new Set(['EXE', 'BAT', 'PS1', 'CMD', 'VBS', 'MSI', 'SCR', 'COM', 'LNK']);
+        files.forEach((f) => {
+          const safeName = escapeHtml(f.originalName);
+          const rawBadge = getExtBadge(f.originalName);
+          const safeBadge = escapeHtml(rawBadge);
+          const safeCode = escapeHtml(f.code);
+          const isExec = execExts.has(rawBadge);
+          const warnTag = isExec
+            ? `<span style="color: #f87171; font-weight: 600;">⚠ Executable</span><span>•</span>`
+            : '';
+          const sourceTag = f.uploadedFrom === 'public'
+            ? `<span>Public upload</span><span>•</span>`
+            : '';
+          const row = document.createElement('div');
+          row.className = 'file-item';
+          row.innerHTML = `
+            <div class="file-meta">
+              <div class="file-type-badge">${safeBadge}</div>
+              <div class="file-info">
+                <div class="file-name" title="${safeName}">${safeName}</div>
+                <div class="file-sub">
+                  ${warnTag}
+                  ${sourceTag}
+                  <span>${formatBytes(f.size)}</span>
+                  <span>•</span>
+                  <span>${f.downloads} ${f.downloads === 1 ? 'download' : 'downloads'}</span>
+                  <span>•</span>
+                  <span>${formatDate(f.createdAt)}</span>
+                  <span>•</span>
+                  <a href="/s/${safeCode}" style="color: #818cf8; font-weight: 600;">/s/${safeCode}</a>
+                </div>
+              </div>
+            </div>
+            <div class="file-actions">
+              <button type="button" class="btn btn-secondary copy-btn">Copy Link</button>
+              <a href="/s/${safeCode}" class="btn btn-secondary">Preview</a>
+              <button type="button" class="btn btn-danger delete-btn" title="Delete file">Delete</button>
+            </div>
+          `;
+
+          row.querySelector('.copy-btn').addEventListener('click', () => copyText(f.shortUrl));
+          row.querySelector('.delete-btn').addEventListener('click', () => deleteFile(f.code));
+          fileList.appendChild(row);
+        });
+      } catch (err) {
+        console.error('Error loading files:', err);
+      }
+    }
+
+    async function checkPublicStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        const badge = document.getElementById('publicUrlBadge');
+        if (data.publicUrl) {
+          badge.href = data.publicUrl;
+          badge.textContent = `● Public: ${data.publicUrl.replace(/^https?:\/\//, '')}`;
+          badge.style.display = 'inline-flex';
+          loadFiles();
+        } else {
+          setTimeout(checkPublicStatus, 1500);
+        }
+      } catch {}
+    }
+
+    loadFiles();
+    checkPublicStatus();
+  </script>
+</body>
+</html>
