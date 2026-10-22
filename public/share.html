@@ -29,7 +29,6 @@
     </main>
   </div>
 
-  
   <div id="lightboxOverlay" class="lightbox-overlay" aria-hidden="true">
     <div class="lightbox-topbar">
       <div class="lightbox-title">
@@ -67,7 +66,7 @@
     }
 
     function formatBytes(bytes) {
-      if (bytes === 0) return '0 B';
+      if (!bytes || bytes === 0) return '0 B';
       const k = 1024;
       const sizes = ['B', 'KB', 'MB', 'GB'];
       const i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -93,10 +92,10 @@
         .replace(/"/g, '&quot;');
     }
 
-    async function copyText(text) {
+    async function copyText(text, label = 'Link') {
       try {
         await navigator.clipboard.writeText(text);
-        showToast('Short link copied to clipboard!');
+        showToast(`${label} copied to clipboard!`);
       } catch {
         const input = document.createElement('input');
         input.value = text;
@@ -104,7 +103,7 @@
         input.select();
         document.execCommand('copy');
         document.body.removeChild(input);
-        showToast('Short link copied to clipboard!');
+        showToast(`${label} copied to clipboard!`);
       }
     }
 
@@ -342,9 +341,9 @@
         if (!res.ok) {
           mainContent.innerHTML = `
             <div class="card" style="text-align: center; padding: 64px 24px;">
-              <h2 style="font-size: 1.6rem; margin-bottom: 10px;">File Not Found</h2>
+              <h2 style="font-size: 1.6rem; margin-bottom: 10px;">File Not Found or Expired</h2>
               <p style="color: var(--text-secondary); margin-bottom: 24px;">
-                This short link does not exist or the file has been deleted.
+                This short link does not exist, has been deleted, or its Litterbox TTL timer expired.
               </p>
               <a href="/" class="btn btn-primary btn-lg">Upload a File</a>
             </div>
@@ -355,12 +354,30 @@
         const file = await res.json();
         document.title = `${file.originalName} — sera.drop`;
 
+        const dedupePill = file.deduplicated
+          ? `<span class="meta-pill pill-emerald">⚡ SHA-256 Deduplicated</span>`
+          : '';
+        const ttlPill = file.expiresAt
+          ? `<span class="meta-pill pill-amber">⏱ Expires: ${escapeHtml(formatDate(file.expiresAt))}</span>`
+          : `<span class="meta-pill pill-emerald">Permanent Storage</span>`;
+        const signedPill = file.requireSignedUrl
+          ? `<span class="meta-pill pill-indigo">🔒 240s Signed URL Active</span>`
+          : '';
+        const shaLine = file.sha256
+          ? `<div style="margin-top: 6px; font-family: monospace; font-size: 0.78rem; color: var(--text-muted);">SHA-256: ${escapeHtml(file.sha256)}</div>`
+          : '';
+
         mainContent.innerHTML = `
           <div class="share-grid">
             <div class="card">
               <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
                 <div style="min-width: 0; flex: 1;">
-                  <span class="nav-badge" style="display: inline-block; margin-bottom: 10px;">${escapeHtml(file.mimeType)}</span>
+                  <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px;">
+                    <span class="nav-badge">${escapeHtml(file.mimeType)}</span>
+                    ${ttlPill}
+                    ${dedupePill}
+                    ${signedPill}
+                  </div>
                   <h1 style="font-size: 1.55rem; word-break: break-all; line-height: 1.3;">${escapeHtml(file.originalName)}</h1>
                   <div class="file-sub" style="margin-top: 8px; font-size: 0.9rem;">
                     <span><strong>Size:</strong> ${formatBytes(file.size)}</span>
@@ -369,6 +386,7 @@
                     <span>•</span>
                     <span><strong id="downloadCount">${file.downloads}</strong> downloads</span>
                   </div>
+                  ${shaLine}
                 </div>
                 <a href="${file.downloadUrl}" id="downloadBtn" class="btn btn-primary btn-lg">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
@@ -386,12 +404,23 @@
             <aside class="card" style="display: flex; flex-direction: column; gap: 18px;">
               <div>
                 <h3 style="font-size: 1.05rem; margin-bottom: 4px;">Share Short Link</h3>
-                <p style="font-size: 0.84rem; color: var(--text-secondary);">Anyone with this link can preview and download this file.</p>
-                <div class="short-link-box" style="margin: 12px 0 10px;">
-                  <input type="text" id="shortUrlInput" class="short-link-input" value="${escapeHtml(file.shortUrl)}" readonly style="font-size: 0.92rem;" />
+                <p style="font-size: 0.84rem; color: var(--text-secondary);">Left-click to copy • Middle-click to open in new tab.</p>
+                <div class="short-link-box" style="margin: 10px 0 8px;">
+                  <input type="text" id="shortUrlInput" class="short-link-input" value="${escapeHtml(file.shortUrl)}" readonly style="font-size: 0.88rem; cursor: pointer;" />
                 </div>
                 <button type="button" id="copyBtn" class="btn btn-primary" style="width: 100%;">
-                  Copy Short Link
+                  Copy Share Link
+                </button>
+              </div>
+
+              <div style="border-top: 1px solid var(--border-subtle); padding-top: 14px;">
+                <h4 style="font-size: 0.92rem; margin-bottom: 4px;">Direct Media Link</h4>
+                <p style="font-size: 0.8rem; color: var(--text-secondary);">Raw HTTP 206 byte-range stream for Discord / embeds.</p>
+                <div class="short-link-box" style="margin: 8px 0;">
+                  <input type="text" id="directUrlInput" class="short-link-input" value="${escapeHtml(file.directUrl || file.rawUrl)}" readonly style="font-size: 0.82rem; cursor: pointer;" />
+                </div>
+                <button type="button" id="copyDirectBtn" class="btn btn-secondary" style="width: 100%;">
+                  Copy Direct URL
                 </button>
               </div>
 
@@ -411,7 +440,15 @@
           </div>
         `;
 
-        document.getElementById('copyBtn').addEventListener('click', () => copyText(file.shortUrl));
+        const shortInput = document.getElementById('shortUrlInput');
+        const directInput = document.getElementById('directUrlInput');
+        shortInput.addEventListener('click', () => copyText(file.shortUrl, 'Share link'));
+        shortInput.addEventListener('auxclick', (e) => { if (e.button === 1) window.open(file.shortUrl, '_blank'); });
+        directInput.addEventListener('click', () => copyText(file.directUrl || file.rawUrl, 'Direct URL'));
+        directInput.addEventListener('auxclick', (e) => { if (e.button === 1) window.open(file.directUrl || file.rawUrl, '_blank'); });
+
+        document.getElementById('copyBtn').addEventListener('click', () => copyText(file.shortUrl, 'Share link'));
+        document.getElementById('copyDirectBtn').addEventListener('click', () => copyText(file.directUrl || file.rawUrl, 'Direct URL'));
         document.getElementById('downloadBtn').addEventListener('click', () => {
           const countEl = document.getElementById('downloadCount');
           if (countEl) {
@@ -514,6 +551,6 @@
     }
 
     loadSharedFile();
-  </script>
+</script>
 </body>
 </html>
