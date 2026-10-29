@@ -27,12 +27,6 @@
     </header>
 
     <main>
-      <div class="mascot-showcase">
-        <div id="mascotFrame" class="mascot-frame">
-          <img id="mascotImg" src="/offscript.png" alt="offscript" class="mascot-img" />
-        </div>
-      </div>
-
       <div class="card">
         <div class="options-bar">
           <div class="option-group">
@@ -168,19 +162,10 @@
     </main>
   </div>
 
+  <img src="/offscript.png" alt="" class="corner-mascot" aria-hidden="true" />
   <div id="toast" class="toast">Copied</div>
 
   <script>
-    const mascotFrame = document.getElementById('mascotFrame');
-    const mascotImg = document.getElementById('mascotImg');
-    const mascotVariants = ['/offscript.png', '/offscript-chibi.png', '/offscript-portrait.png'];
-    let mascotIdx = 0;
-
-    mascotFrame.addEventListener('click', () => {
-      mascotIdx = (mascotIdx + 1) % mascotVariants.length;
-      mascotImg.src = mascotVariants[mascotIdx];
-    });
-
     const dropzone = document.getElementById('dropzone');
     const fileInput = document.getElementById('fileInput');
     const ttlSelect = document.getElementById('ttlSelect');

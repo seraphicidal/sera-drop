@@ -122,39 +122,32 @@ a {
   color: var(--text-primary);
 }
 
-.mascot-showcase {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 20px;
-}
-
-.mascot-frame {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: #ffffff;
-  border: 1.5px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  padding: 6px;
-  cursor: pointer;
-  transition: border-color 0.2s ease, transform 0.2s ease;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-}
-
-.mascot-frame:hover {
-  border-color: var(--accent);
-  transform: translateY(-2px);
-}
-
-.mascot-img {
-  display: block;
-  height: 156px;
-  width: auto;
-  border-radius: 10px;
-  object-fit: contain;
+.corner-mascot {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 190px;
+  height: auto;
+  opacity: 0.88;
+  pointer-events: none;
   user-select: none;
   -webkit-user-drag: none;
+  z-index: 5;
+  filter: grayscale(100%);
+}
+
+@media (max-width: 1180px) {
+  .corner-mascot {
+    width: 135px;
+    opacity: 0.55;
+  }
+}
+
+@media (max-width: 720px) {
+  .corner-mascot {
+    width: 96px;
+    opacity: 0.35;
+  }
 }
 
 .card {
