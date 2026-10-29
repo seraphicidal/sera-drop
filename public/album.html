@@ -4,19 +4,19 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>sera.drop</title>
+  <link rel="icon" type="image/png" href="/icon.png" />
+  <link rel="shortcut icon" href="/favicon.ico" />
+  <link rel="apple-touch-icon" href="/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="container">
     <header class="navbar">
       <a href="/" class="brand">
-        <div class="brand-icon">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter">
-            <path d="M21 15v4H3v-4"/>
-            <polyline points="17 8 12 3 7 8"/>
-            <line x1="12" y1="3" x2="12" y2="15"/>
-          </svg>
-        </div>
+        <img src="/icon.png" alt="sera.drop" class="brand-icon" />
         <span>sera<span class="brand-dot">.</span>drop</span>
       </a>
       <a href="/" class="btn btn-secondary btn-sm">Upload</a>
@@ -82,8 +82,8 @@
         if (!res.ok) {
           albumMain.innerHTML = `
             <div class="card" style="text-align: center; padding: 56px 24px;">
-              <h2 style="font-size: 1.25rem; font-weight: 500; margin-bottom: 8px;">Not Found</h2>
-              <p style="color: var(--text-secondary); font-family: var(--font-mono); font-size: 0.8rem; margin-bottom: 20px;">
+              <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 8px;">Not Found</h2>
+              <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 20px;">
                 /c/${escapeHtml(short)} does not exist.
               </p>
               <a href="/" class="btn btn-primary">Return</a>
@@ -137,12 +137,12 @@
           .join('');
 
         albumMain.innerHTML = `
-          <div class="card" style="margin-bottom: 20px; border-left: 2px solid var(--accent);">
+          <div class="card" style="margin-bottom: 20px; border-left: 3px solid var(--accent);">
             <div style="display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap;">
               <div>
                 <span class="meta-pill pill-crimson">/c/${escapeHtml(album.short)}</span>
-                <h1 style="font-size: 1.35rem; font-weight: 500; margin-top: 8px;">${escapeHtml(album.title)}</h1>
-                ${album.description ? `<p style="color: var(--text-secondary); font-size: 0.84rem; margin-top: 4px;">${escapeHtml(album.description)}</p>` : ''}
+                <h1 style="font-size: 1.35rem; font-weight: 600; margin-top: 8px;">${escapeHtml(album.title)}</h1>
+                ${album.description ? `<p style="color: var(--text-secondary); font-size: 0.86rem; margin-top: 4px;">${escapeHtml(album.description)}</p>` : ''}
                 <div class="file-sub" style="margin-top: 8px;">
                   <span>${album.files.length} files</span>
                   <span>${escapeHtml(formatBytes(totalBytes))}</span>

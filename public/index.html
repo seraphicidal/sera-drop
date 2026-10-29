@@ -4,19 +4,19 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>sera.drop</title>
+  <link rel="icon" type="image/png" href="/icon.png" />
+  <link rel="shortcut icon" href="/favicon.ico" />
+  <link rel="apple-touch-icon" href="/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="container">
     <header class="navbar">
       <a href="/" class="brand">
-        <div class="brand-icon">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter">
-            <path d="M21 15v4H3v-4"/>
-            <polyline points="17 8 12 3 7 8"/>
-            <line x1="12" y1="3" x2="12" y2="15"/>
-          </svg>
-        </div>
+        <img src="/icon.png" alt="sera.drop" class="brand-icon" />
         <span>sera<span class="brand-dot">.</span>drop</span>
       </a>
       <div class="nav-meta">
@@ -27,6 +27,12 @@
     </header>
 
     <main>
+      <div class="mascot-showcase">
+        <div id="mascotFrame" class="mascot-frame">
+          <img id="mascotImg" src="/offscript.png" alt="offscript" class="mascot-img" />
+        </div>
+      </div>
+
       <div class="card">
         <div class="options-bar">
           <div class="option-group">
@@ -60,8 +66,8 @@
         <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload file dropzone">
           <input type="file" id="fileInput" multiple hidden />
           <div class="dropzone-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="square" stroke-linejoin="miter">
-              <path d="M21 15v4H3v-4"/>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
               <polyline points="17 8 12 3 7 8"/>
               <line x1="12" y1="3" x2="12" y2="15"/>
             </svg>
@@ -101,7 +107,7 @@
             <span id="resultSignedBadge" class="meta-pill pill-crimson" style="display: none;">Signed</span>
           </div>
 
-          <h2 id="resultFileName" style="font-size: 1.15rem; font-weight: 500; word-break: break-all;">filename.ext</h2>
+          <h2 id="resultFileName" style="font-size: 1.15rem; font-weight: 600; word-break: break-all;">filename.ext</h2>
           <div id="resultFileMeta" class="file-sub" style="margin-top: 4px;"></div>
 
           <div class="short-link-box">
@@ -137,7 +143,7 @@
             type="text"
             id="albumTitleInput"
             class="control-input"
-            style="width: 190px; padding: 5px 10px; font-size: 0.76rem;"
+            style="width: 190px; padding: 5px 10px; font-size: 0.8rem;"
             placeholder="Album title"
           />
           <button type="button" id="createAlbumBtn" class="btn btn-secondary btn-sm">Create Album</button>
@@ -148,7 +154,7 @@
         <div class="album-banner-inner">
           <div class="album-banner-info">
             <span class="meta-pill pill-crimson">Album</span>
-            <strong id="albumResultTitle" style="font-size: 0.88rem; font-weight: 500;">Album</strong>
+            <strong id="albumResultTitle" style="font-size: 0.9rem; font-weight: 600;">Album</strong>
             <a id="albumResultLink" href="#" target="_blank" rel="noopener noreferrer" class="album-banner-link"></a>
           </div>
           <div style="display: flex; gap: 6px;">
@@ -165,6 +171,16 @@
   <div id="toast" class="toast">Copied</div>
 
   <script>
+    const mascotFrame = document.getElementById('mascotFrame');
+    const mascotImg = document.getElementById('mascotImg');
+    const mascotVariants = ['/offscript.png', '/offscript-chibi.png', '/offscript-portrait.png'];
+    let mascotIdx = 0;
+
+    mascotFrame.addEventListener('click', () => {
+      mascotIdx = (mascotIdx + 1) % mascotVariants.length;
+      mascotImg.src = mascotVariants[mascotIdx];
+    });
+
     const dropzone = document.getElementById('dropzone');
     const fileInput = document.getElementById('fileInput');
     const ttlSelect = document.getElementById('ttlSelect');

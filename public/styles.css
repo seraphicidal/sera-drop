@@ -1,24 +1,24 @@
 :root {
-  --bg-primary: #050505;
-  --bg-secondary: #0b0b0b;
-  --bg-card: #0e0e0e;
-  --bg-elevated: #151515;
-  --border-subtle: #222222;
-  --border-strong: #363636;
+  --bg-primary: #060607;
+  --bg-secondary: #0c0c0e;
+  --bg-card: #101013;
+  --bg-elevated: #17171b;
+  --border-subtle: #232329;
+  --border-strong: #36363f;
   --border-highlight: #d43255;
-  --text-primary: #f2f2f2;
-  --text-secondary: #8a8a8a;
-  --text-muted: #525252;
+  --text-primary: #f4f4f6;
+  --text-secondary: #94949e;
+  --text-muted: #5a5a64;
   --accent: #d43255;
   --accent-hover: #e04365;
   --accent-soft: #d8757a;
-  --accent-wash: rgba(212, 50, 85, 0.08);
+  --accent-wash: rgba(212, 50, 85, 0.09);
   --danger: #d43255;
-  --radius-lg: 2px;
-  --radius-md: 2px;
-  --radius-sm: 2px;
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Segoe UI', sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --radius-sm: 8px;
+  --font-sans: 'Quicksand', 'Zen Maru Gothic', 'Nunito', 'Hiragino Maru Gothic ProN', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'Quicksand', 'Zen Maru Gothic', 'Nunito', sans-serif;
 }
 
 * {
@@ -34,10 +34,11 @@
 
 body {
   font-family: var(--font-sans);
+  font-weight: 500;
   background-color: var(--bg-primary);
   color: var(--text-primary);
   min-height: 100vh;
-  line-height: 1.5;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -47,7 +48,7 @@ a {
 }
 
 .container {
-  max-width: 960px;
+  max-width: 940px;
   margin: 0 auto;
   padding: 0 24px 72px;
 }
@@ -56,8 +57,8 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 28px 0 20px;
-  margin-bottom: 32px;
+  padding: 24px 0 18px;
+  margin-bottom: 24px;
   border-bottom: 1px solid var(--border-subtle);
   gap: 16px;
   flex-wrap: wrap;
@@ -66,22 +67,20 @@ a {
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
-  font-weight: 600;
-  font-size: 1.1rem;
-  letter-spacing: 0.04em;
-  font-family: var(--font-mono);
+  gap: 11px;
+  font-weight: 700;
+  font-size: 1.18rem;
+  letter-spacing: 0.01em;
 }
 
 .brand-icon {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  border: 1px solid var(--accent);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1.5px solid var(--accent);
+  object-fit: cover;
+  display: block;
+  background: #ffffff;
 }
 
 .brand-dot {
@@ -99,14 +98,13 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 12px;
-  font-family: var(--font-mono);
-  font-size: 0.74rem;
-  letter-spacing: 0.02em;
+  font-size: 0.8rem;
+  font-weight: 600;
   color: var(--text-secondary);
   background: var(--bg-secondary);
   border: 1px solid var(--border-subtle);
-  padding: 5px 10px;
-  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  border-radius: 999px;
 }
 
 .nav-badge-active {
@@ -124,6 +122,41 @@ a {
   color: var(--text-primary);
 }
 
+.mascot-showcase {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.mascot-frame {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 6px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.mascot-frame:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.mascot-img {
+  display: block;
+  height: 156px;
+  width: auto;
+  border-radius: 10px;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
 .card {
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
@@ -132,14 +165,14 @@ a {
 }
 
 .dropzone {
-  border: 1px dashed var(--border-strong);
+  border: 1.5px dashed var(--border-strong);
   border-radius: var(--radius-lg);
-  padding: 48px 24px;
+  padding: 40px 24px;
   text-align: center;
   cursor: pointer;
   transition: border-color 0.15s ease, background-color 0.15s ease;
   background-color: var(--bg-secondary);
-  background-image: radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-image: radial-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px);
   background-size: 16px 16px;
   position: relative;
   outline: none;
@@ -156,7 +189,8 @@ a {
 .dropzone-icon {
   width: 48px;
   height: 48px;
-  margin: 0 auto 14px;
+  margin: 0 auto 12px;
+  border-radius: 12px;
   border: 1px solid var(--border-strong);
   background: var(--bg-primary);
   color: var(--text-primary);
@@ -173,17 +207,15 @@ a {
 }
 
 .dropzone h2 {
-  font-size: 1.05rem;
-  font-weight: 500;
-  letter-spacing: 0.01em;
+  font-size: 1.08rem;
+  font-weight: 600;
   margin-bottom: 4px;
 }
 
 .dropzone p {
   color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  margin-bottom: 18px;
+  font-size: 0.84rem;
+  margin-bottom: 16px;
 }
 
 .progress-wrapper {
@@ -198,15 +230,16 @@ a {
 .progress-header {
   display: flex;
   justify-content: space-between;
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: 0.82rem;
+  font-weight: 600;
   color: var(--text-secondary);
   margin-bottom: 6px;
 }
 
 .progress-track {
   width: 100%;
-  height: 3px;
+  height: 5px;
+  border-radius: 999px;
   background: var(--border-subtle);
   overflow: hidden;
 }
@@ -214,6 +247,7 @@ a {
 .progress-fill {
   height: 100%;
   width: 0%;
+  border-radius: 999px;
   background: var(--accent);
   transition: width 0.12s ease;
 }
@@ -223,15 +257,14 @@ a {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  font-weight: 500;
-  font-size: 0.82rem;
-  letter-spacing: 0.02em;
+  font-weight: 600;
+  font-size: 0.86rem;
   padding: 8px 16px;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   cursor: pointer;
   transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
 }
 
 .btn:disabled {
@@ -258,7 +291,7 @@ a {
 
 .btn-secondary:hover:not(:disabled) {
   border-color: var(--border-strong);
-  background: #1e1e1e;
+  background: #1f1f24;
 }
 
 .btn-danger {
@@ -275,19 +308,19 @@ a {
 
 .btn-lg {
   padding: 11px 20px;
-  font-size: 0.86rem;
+  font-size: 0.9rem;
 }
 
 .btn-sm {
-  padding: 5px 10px;
-  font-size: 0.74rem;
+  padding: 5px 11px;
+  font-size: 0.78rem;
 }
 
 .result-card {
   display: none;
   margin-top: 20px;
   border-color: var(--border-strong);
-  border-left: 2px solid var(--accent);
+  border-left: 3px solid var(--accent);
   background: var(--bg-card);
 }
 
@@ -316,15 +349,12 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: 0.74rem;
+  font-weight: 700;
   color: #ffffff;
   background: var(--accent);
-  padding: 3px 8px;
-  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+  border-radius: 999px;
 }
 
 .short-link-box {
@@ -343,8 +373,9 @@ a {
   background: transparent;
   border: none;
   color: var(--text-primary);
-  font-size: 0.88rem;
-  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  font-weight: 600;
+  font-family: var(--font-sans);
   outline: none;
   width: 100%;
   cursor: pointer;
@@ -354,7 +385,7 @@ a {
   background: #ffffff;
   padding: 10px;
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   text-align: center;
 }
 
@@ -370,7 +401,7 @@ a {
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
-  margin: 36px 0 14px;
+  margin: 34px 0 14px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border-subtle);
 }
@@ -382,17 +413,14 @@ a {
 }
 
 .section-header h3 {
-  font-size: 0.95rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-family: var(--font-mono);
+  font-size: 1.02rem;
+  font-weight: 700;
 }
 
 .section-count {
   color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.76rem;
+  font-size: 0.82rem;
+  font-weight: 600;
 }
 
 .album-controls {
@@ -404,7 +432,7 @@ a {
 
 .album-banner {
   margin-bottom: 14px;
-  border-left: 2px solid var(--accent);
+  border-left: 3px solid var(--accent);
   padding: 14px 18px;
 }
 
@@ -425,8 +453,8 @@ a {
 
 .album-banner-link {
   color: var(--accent-soft);
-  font-family: var(--font-mono);
-  font-size: 0.84rem;
+  font-weight: 600;
+  font-size: 0.88rem;
 }
 
 .file-list {
@@ -438,8 +466,7 @@ a {
 .empty-state {
   text-align: center;
   color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
+  font-size: 0.88rem;
   padding: 28px;
 }
 
@@ -468,7 +495,7 @@ a {
 }
 
 .file-type-badge {
-  width: 40px;
+  width: 42px;
   height: 36px;
   border-radius: var(--radius-sm);
   background: var(--bg-primary);
@@ -477,10 +504,8 @@ a {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-family: var(--font-mono);
-  font-weight: 600;
-  font-size: 0.68rem;
-  text-transform: uppercase;
+  font-weight: 700;
+  font-size: 0.72rem;
   flex-shrink: 0;
 }
 
@@ -489,8 +514,8 @@ a {
 }
 
 .file-name {
-  font-weight: 500;
-  font-size: 0.92rem;
+  font-weight: 600;
+  font-size: 0.94rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -498,8 +523,8 @@ a {
 
 .file-sub {
   color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.74rem;
+  font-size: 0.78rem;
+  font-weight: 600;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -596,8 +621,8 @@ a {
   max-height: 480px;
   overflow: auto;
   padding: 18px;
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
+  font-family: var(--font-sans);
+  font-size: 0.86rem;
   line-height: 1.6;
   color: var(--text-primary);
   white-space: pre-wrap;
@@ -609,22 +634,21 @@ a {
   padding: 48px 24px;
   text-align: center;
   color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
+  font-size: 0.88rem;
 }
 
 .toast {
   position: fixed;
   bottom: 24px;
   right: 24px;
-  background: var(--bg-primary);
+  background: var(--bg-card);
   color: var(--text-primary);
   border: 1px solid var(--border-subtle);
-  border-left: 2px solid var(--accent);
-  padding: 10px 16px;
+  border-left: 3px solid var(--accent);
+  padding: 10px 18px;
   border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: 0.85rem;
+  font-weight: 600;
   opacity: 0;
   transform: translateY(8px);
   pointer-events: none;
@@ -655,9 +679,9 @@ a {
 }
 
 .image-res-badge {
-  font-size: 0.74rem;
+  font-size: 0.78rem;
+  font-weight: 600;
   color: var(--text-secondary);
-  font-family: var(--font-mono);
 }
 
 .image-toolbar-actions {
@@ -727,8 +751,8 @@ a {
   display: flex;
   align-items: center;
   gap: 12px;
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
+  font-size: 0.9rem;
+  font-weight: 600;
   min-width: 0;
 }
 
@@ -748,8 +772,8 @@ a {
 .zoom-indicator {
   min-width: 58px;
   text-align: center;
-  font-family: var(--font-mono);
-  font-size: 0.74rem;
+  font-size: 0.78rem;
+  font-weight: 600;
   color: var(--text-primary);
   background: var(--bg-primary);
   padding: 5px 8px;
@@ -791,10 +815,8 @@ a {
 }
 
 .option-group label {
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-size: 0.78rem;
+  font-weight: 600;
   color: var(--text-secondary);
 }
 
@@ -809,16 +831,14 @@ a {
   gap: 8px;
   cursor: pointer;
   user-select: none;
-  font-size: 0.78rem !important;
-  text-transform: none !important;
-  letter-spacing: 0.01em !important;
+  font-size: 0.84rem !important;
   color: var(--text-primary) !important;
 }
 
 .checkbox-label input[type="checkbox"],
 .album-check {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   accent-color: var(--accent);
   cursor: pointer;
 }
@@ -828,10 +848,11 @@ a {
   background: var(--bg-primary);
   border: 1px solid var(--border-subtle);
   color: var(--text-primary);
-  padding: 8px 10px;
+  padding: 8px 12px;
   border-radius: var(--radius-sm);
-  font-size: 0.82rem;
-  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-family: var(--font-sans);
   outline: none;
   transition: border-color 0.15s ease;
 }
@@ -852,14 +873,11 @@ a {
 }
 
 .link-prefix-tag {
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-size: 0.74rem;
+  font-weight: 700;
   color: var(--text-secondary);
   background: var(--bg-secondary);
-  padding: 3px 7px;
+  padding: 3px 8px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
 }
@@ -868,12 +886,10 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 3px 8px;
-  border-radius: var(--radius-sm);
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
   background: var(--bg-secondary);
@@ -931,8 +947,7 @@ a {
 }
 
 .album-thumb-placeholder {
-  font-family: var(--font-mono);
-  font-weight: 600;
+  font-weight: 700;
   font-size: 0.95rem;
   color: var(--text-secondary);
   background: var(--bg-secondary);
@@ -949,8 +964,8 @@ a {
 }
 
 .album-card-title {
-  font-weight: 500;
-  font-size: 0.88rem;
+  font-weight: 600;
+  font-size: 0.9rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -959,8 +974,8 @@ a {
 .album-card-meta {
   display: flex;
   gap: 10px;
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: 0.76rem;
+  font-weight: 600;
   color: var(--text-secondary);
 }
 
@@ -972,8 +987,7 @@ a {
 
 .sha-line {
   margin-top: 6px;
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: 0.74rem;
   color: var(--text-muted);
   word-break: break-all;
 }
@@ -984,10 +998,8 @@ a {
 }
 
 .sidebar-label {
-  font-family: var(--font-mono);
-  font-size: 0.74rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-size: 0.8rem;
+  font-weight: 600;
   color: var(--text-secondary);
   margin-bottom: 6px;
 }
