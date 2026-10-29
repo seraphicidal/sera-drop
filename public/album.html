@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Album Collection — sera.drop</title>
+  <title>sera.drop</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -11,25 +11,23 @@
     <header class="navbar">
       <a href="/" class="brand">
         <div class="brand-icon">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter">
+            <path d="M21 15v4H3v-4"/>
             <polyline points="17 8 12 3 7 8"/>
             <line x1="12" y1="3" x2="12" y2="15"/>
           </svg>
         </div>
-        <span>sera.drop</span>
+        <span>sera<span class="brand-dot">.</span>drop</span>
       </a>
-      <a href="/" class="btn btn-secondary">Upload Files</a>
+      <a href="/" class="btn btn-secondary btn-sm">Upload</a>
     </header>
 
     <main id="albumMain">
-      <div class="card" style="text-align: center; padding: 64px 24px; color: var(--text-secondary);">
-        Loading album collection...
-      </div>
+      <div class="card empty-state">Loading</div>
     </main>
   </div>
 
-  <div id="toast" class="toast">Copied to clipboard!</div>
+  <div id="toast" class="toast">Copied</div>
 
   <script>
     const albumMain = document.getElementById('albumMain');
@@ -40,7 +38,7 @@
       toast.textContent = msg;
       toast.classList.add('show');
       clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
     }
 
     function formatBytes(bytes) {
@@ -56,13 +54,14 @@
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     }
 
     async function copyText(text, label = 'Link') {
       try {
         await navigator.clipboard.writeText(text);
-        showToast(`${label} copied to clipboard!`);
+        showToast(`${label} copied`);
       } catch {
         const input = document.createElement('input');
         input.value = text;
@@ -70,7 +69,7 @@
         input.select();
         document.execCommand('copy');
         document.body.removeChild(input);
-        showToast(`${label} copied to clipboard!`);
+        showToast(`${label} copied`);
       }
     }
 
@@ -82,46 +81,54 @@
         const res = await fetch(`/api/albums/${encodeURIComponent(short)}`);
         if (!res.ok) {
           albumMain.innerHTML = `
-            <div class="card" style="text-align: center; padding: 64px 24px;">
-              <h2 style="font-size: 1.6rem; margin-bottom: 10px;">Album Not Found</h2>
-              <p style="color: var(--text-secondary); margin-bottom: 24px;">
-                This /c/${escapeHtml(short)} collection does not exist or has been removed.
+            <div class="card" style="text-align: center; padding: 56px 24px;">
+              <h2 style="font-size: 1.25rem; font-weight: 500; margin-bottom: 8px;">Not Found</h2>
+              <p style="color: var(--text-secondary); font-family: var(--font-mono); font-size: 0.8rem; margin-bottom: 20px;">
+                /c/${escapeHtml(short)} does not exist.
               </p>
-              <a href="/" class="btn btn-primary btn-lg">Return Home</a>
+              <a href="/" class="btn btn-primary">Return</a>
             </div>
           `;
           return;
         }
 
         const album = await res.json();
-        document.title = `${album.title} (/c/${album.short}) — sera.drop`;
+        document.title = `${album.title} — sera.drop`;
 
         const totalBytes = album.files.reduce((sum, f) => sum + (f.size || 0), 0);
 
         const cardsHtml = album.files
           .map((f) => {
+            const safeRawUrl = escapeHtml(f.rawUrl);
+            const safeDownloadUrl = escapeHtml(f.downloadUrl);
+            const safeDirectUrl = escapeHtml(f.directUrl || f.rawUrl);
+            const safeName = escapeHtml(f.originalName);
+            const safeCode = escapeHtml(f.code);
             let thumbHtml = '';
             if (f.previewCategory === 'image') {
-              thumbHtml = `<img src="${f.rawUrl}" alt="${escapeHtml(f.originalName)}" class="album-thumb-img" loading="lazy" />`;
+              thumbHtml = `<img src="${safeRawUrl}" alt="${safeName}" class="album-thumb-img" loading="lazy" />`;
             } else if (f.previewCategory === 'video') {
-              thumbHtml = `<video src="${f.rawUrl}" preload="metadata" muted class="album-thumb-img"></video>`;
+              thumbHtml = `<video src="${safeRawUrl}" preload="metadata" muted class="album-thumb-img"></video>`;
             } else {
               thumbHtml = `<div class="album-thumb-placeholder">${escapeHtml((f.originalName.split('.').pop() || 'FILE').toUpperCase())}</div>`;
             }
 
             return `
-              <div class="album-card" data-fancybox="gallery">
-                <a href="/s/${escapeHtml(f.code)}" class="album-thumb-link">
+              <div class="album-card">
+                <a href="/s/${safeCode}" class="album-thumb-link">
                   ${thumbHtml}
                 </a>
                 <div class="album-card-body">
-                  <a href="/s/${escapeHtml(f.code)}" class="album-card-title" title="${escapeHtml(f.originalName)}">
-                    ${escapeHtml(f.originalName)}
+                  <a href="/s/${safeCode}" class="album-card-title" title="${safeName}">
+                    ${safeName}
                   </a>
-                  <div class="album-card-meta">${formatBytes(f.size)} • ${f.downloads} dl</div>
+                  <div class="album-card-meta">
+                    <span>${escapeHtml(formatBytes(f.size))}</span>
+                    <span>${Number(f.downloads) || 0} dl</span>
+                  </div>
                   <div class="album-card-actions">
-                    <button type="button" class="btn btn-secondary btn-sm copy-direct" data-url="${escapeHtml(f.directUrl || f.rawUrl)}">Copy Direct</button>
-                    <a href="${f.downloadUrl}" class="btn btn-primary btn-sm">Download</a>
+                    <button type="button" class="btn btn-secondary btn-sm copy-direct" data-url="${safeDirectUrl}">Direct</button>
+                    <a href="${safeDownloadUrl}" class="btn btn-primary btn-sm">Download</a>
                   </div>
                 </div>
               </div>
@@ -130,22 +137,21 @@
           .join('');
 
         albumMain.innerHTML = `
-          <div class="card" style="margin-bottom: 24px;">
+          <div class="card" style="margin-bottom: 20px; border-left: 2px solid var(--accent);">
             <div style="display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap;">
               <div>
-                <span class="meta-pill pill-indigo">Album Collection • /c/${escapeHtml(album.short)}</span>
-                <h1 style="font-size: 1.75rem; margin-top: 8px;">${escapeHtml(album.title)}</h1>
-                <p style="color: var(--text-secondary); margin-top: 4px;">${escapeHtml(album.description || '')}</p>
+                <span class="meta-pill pill-crimson">/c/${escapeHtml(album.short)}</span>
+                <h1 style="font-size: 1.35rem; font-weight: 500; margin-top: 8px;">${escapeHtml(album.title)}</h1>
+                ${album.description ? `<p style="color: var(--text-secondary); font-size: 0.84rem; margin-top: 4px;">${escapeHtml(album.description)}</p>` : ''}
                 <div class="file-sub" style="margin-top: 8px;">
-                  <span><strong>${album.files.length}</strong> files</span>
-                  <span>•</span>
-                  <span><strong>Total Size:</strong> ${formatBytes(totalBytes)}</span>
+                  <span>${album.files.length} files</span>
+                  <span>${escapeHtml(formatBytes(totalBytes))}</span>
                 </div>
               </div>
-              <div style="display: flex; align-items: center; gap: 14px;">
-                <button type="button" id="copyAlbumUrlBtn" class="btn btn-primary">Copy Album Link</button>
-                <div class="qr-box" style="padding: 8px;">
-                  <img src="${album.qrCodeDataUrl}" alt="Album QR" style="width: 84px; height: 84px;" />
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <button type="button" id="copyAlbumUrlBtn" class="btn btn-primary btn-sm">Copy Link</button>
+                <div class="qr-box" style="padding: 6px;">
+                  <img src="${escapeHtml(album.qrCodeDataUrl)}" alt="Album QR" style="width: 76px; height: 76px;" />
                 </div>
               </div>
             </div>
@@ -163,7 +169,7 @@
         document.querySelectorAll('.copy-direct').forEach((btn) => {
           btn.addEventListener('click', () => copyText(btn.dataset.url, 'Direct link'));
           btn.addEventListener('auxclick', (e) => {
-            if (e.button === 1) window.open(btn.dataset.url, '_blank');
+            if (e.button === 1) window.open(btn.dataset.url, '_blank', 'noopener,noreferrer');
           });
         });
       } catch (err) {
@@ -172,6 +178,6 @@
     }
 
     loadAlbum();
-</script>
+  </script>
 </body>
 </html>

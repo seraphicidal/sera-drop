@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Shared File — sera.drop</title>
+  <title>sera.drop</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -11,21 +11,19 @@
     <header class="navbar">
       <a href="/" class="brand">
         <div class="brand-icon">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter">
+            <path d="M21 15v4H3v-4"/>
             <polyline points="17 8 12 3 7 8"/>
             <line x1="12" y1="3" x2="12" y2="15"/>
           </svg>
         </div>
-        <span>sera.drop</span>
+        <span>sera<span class="brand-dot">.</span>drop</span>
       </a>
-      <a href="/" class="btn btn-secondary">Upload New File</a>
+      <a href="/" class="btn btn-secondary btn-sm">Upload</a>
     </header>
 
     <main id="mainContent">
-      <div class="card" style="text-align: center; padding: 64px 24px; color: var(--text-secondary);">
-        Loading shared file...
-      </div>
+      <div class="card empty-state">Loading</div>
     </main>
   </div>
 
@@ -36,22 +34,21 @@
         <span id="lbResolution" class="image-res-badge"></span>
       </div>
       <div class="lightbox-controls">
-        <button type="button" id="lbZoomOut" class="btn btn-secondary btn-sm" title="Zoom Out (-)">−</button>
+        <button type="button" id="lbZoomOut" class="btn btn-secondary btn-sm">−</button>
         <span id="lbZoomLevel" class="zoom-indicator">100%</span>
-        <button type="button" id="lbZoomIn" class="btn btn-secondary btn-sm" title="Zoom In (+)">+</button>
-        <button type="button" id="lbFitBtn" class="btn btn-secondary btn-sm" title="Fit to Screen">Fit</button>
-        <button type="button" id="lbOriginalBtn" class="btn btn-primary btn-sm" title="Show 1:1 Original Resolution (100%)">1:1 Original</button>
-        <a id="lbRawLink" href="#" target="_blank" class="btn btn-secondary btn-sm" title="Open raw uncompressed image in new tab">Raw Image</a>
-        <button type="button" id="lbCloseBtn" class="btn btn-danger btn-sm" title="Exit Fullscreen (Esc)">Close ✕</button>
+        <button type="button" id="lbZoomIn" class="btn btn-secondary btn-sm">+</button>
+        <button type="button" id="lbFitBtn" class="btn btn-secondary btn-sm">Fit</button>
+        <button type="button" id="lbOriginalBtn" class="btn btn-primary btn-sm">1:1</button>
+        <a id="lbRawLink" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm">Raw</a>
+        <button type="button" id="lbCloseBtn" class="btn btn-danger btn-sm">Close</button>
       </div>
     </div>
     <div id="lightboxStage" class="lightbox-stage">
       <img id="lightboxImg" class="zoomable-img" src="" alt="" />
-      <div class="lightbox-hint">Scroll to zoom • Drag to pan • Double-click for 1:1 original resolution • Esc to exit</div>
     </div>
   </div>
 
-  <div id="toast" class="toast">Copied to clipboard!</div>
+  <div id="toast" class="toast">Copied</div>
 
   <script>
     const mainContent = document.getElementById('mainContent');
@@ -62,7 +59,7 @@
       toast.textContent = msg;
       toast.classList.add('show');
       clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
     }
 
     function formatBytes(bytes) {
@@ -89,13 +86,14 @@
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     }
 
     async function copyText(text, label = 'Link') {
       try {
         await navigator.clipboard.writeText(text);
-        showToast(`${label} copied to clipboard!`);
+        showToast(`${label} copied`);
       } catch {
         const input = document.createElement('input');
         input.value = text;
@@ -103,7 +101,7 @@
         input.select();
         document.execCommand('copy');
         document.body.removeChild(input);
-        showToast(`${label} copied to clipboard!`);
+        showToast(`${label} copied`);
       }
     }
 
@@ -283,7 +281,7 @@
       }
 
       const applyInitialZoom = () => {
-        lbResolution.textContent = `${lightboxImg.naturalWidth} × ${lightboxImg.naturalHeight} px`;
+        lbResolution.textContent = `${lightboxImg.naturalWidth} × ${lightboxImg.naturalHeight}`;
         if (startInOriginalResolution) {
           lbController.setOriginalResolution();
         } else {
@@ -340,12 +338,12 @@
         const res = await fetch(`/api/files/${encodeURIComponent(code)}`);
         if (!res.ok) {
           mainContent.innerHTML = `
-            <div class="card" style="text-align: center; padding: 64px 24px;">
-              <h2 style="font-size: 1.6rem; margin-bottom: 10px;">File Not Found or Expired</h2>
-              <p style="color: var(--text-secondary); margin-bottom: 24px;">
-                This short link does not exist, has been deleted, or its Litterbox TTL timer expired.
+            <div class="card" style="text-align: center; padding: 56px 24px;">
+              <h2 style="font-size: 1.25rem; font-weight: 500; margin-bottom: 8px;">Not Found</h2>
+              <p style="color: var(--text-secondary); font-family: var(--font-mono); font-size: 0.8rem; margin-bottom: 20px;">
+                File does not exist or has expired.
               </p>
-              <a href="/" class="btn btn-primary btn-lg">Upload a File</a>
+              <a href="/" class="btn btn-primary">Upload</a>
             </div>
           `;
           return;
@@ -355,16 +353,16 @@
         document.title = `${file.originalName} — sera.drop`;
 
         const dedupePill = file.deduplicated
-          ? `<span class="meta-pill pill-emerald">⚡ SHA-256 Deduplicated</span>`
+          ? `<span class="meta-pill pill-mono">Deduplicated</span>`
           : '';
         const ttlPill = file.expiresAt
-          ? `<span class="meta-pill pill-amber">⏱ Expires: ${escapeHtml(formatDate(file.expiresAt))}</span>`
-          : `<span class="meta-pill pill-emerald">Permanent Storage</span>`;
+          ? `<span class="meta-pill pill-crimson">Expires ${escapeHtml(formatDate(file.expiresAt))}</span>`
+          : `<span class="meta-pill">Permanent</span>`;
         const signedPill = file.requireSignedUrl
-          ? `<span class="meta-pill pill-indigo">🔒 240s Signed URL Active</span>`
+          ? `<span class="meta-pill pill-crimson">Signed</span>`
           : '';
         const shaLine = file.sha256
-          ? `<div style="margin-top: 6px; font-family: monospace; font-size: 0.78rem; color: var(--text-muted);">SHA-256: ${escapeHtml(file.sha256)}</div>`
+          ? `<div class="sha-line">${escapeHtml(file.sha256)}</div>`
           : '';
 
         mainContent.innerHTML = `
@@ -372,68 +370,49 @@
             <div class="card">
               <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
                 <div style="min-width: 0; flex: 1;">
-                  <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px;">
-                    <span class="nav-badge">${escapeHtml(file.mimeType)}</span>
+                  <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;">
+                    <span class="meta-pill">${escapeHtml(file.mimeType)}</span>
                     ${ttlPill}
                     ${dedupePill}
                     ${signedPill}
                   </div>
-                  <h1 style="font-size: 1.55rem; word-break: break-all; line-height: 1.3;">${escapeHtml(file.originalName)}</h1>
-                  <div class="file-sub" style="margin-top: 8px; font-size: 0.9rem;">
-                    <span><strong>Size:</strong> ${formatBytes(file.size)}</span>
-                    <span>•</span>
-                    <span><strong>Uploaded:</strong> ${formatDate(file.createdAt)}</span>
-                    <span>•</span>
-                    <span><strong id="downloadCount">${file.downloads}</strong> downloads</span>
+                  <h1 style="font-size: 1.25rem; font-weight: 500; word-break: break-all; line-height: 1.3;">${escapeHtml(file.originalName)}</h1>
+                  <div class="file-sub" style="margin-top: 6px;">
+                    <span>${escapeHtml(formatBytes(file.size))}</span>
+                    <span>${escapeHtml(formatDate(file.createdAt))}</span>
+                    <span><strong id="downloadCount">${Number(file.downloads) || 0}</strong> dl</span>
                   </div>
                   ${shaLine}
                 </div>
-                <a href="${file.downloadUrl}" id="downloadBtn" class="btn btn-primary btn-lg">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                    <polyline points="7 10 12 15 17 10"/>
-                    <line x1="12" y1="15" x2="12" y2="3"/>
-                  </svg>
-                  Download File
-                </a>
+                <a href="${escapeHtml(file.downloadUrl)}" id="downloadBtn" class="btn btn-primary btn-lg">Download</a>
               </div>
 
               <div id="previewContainer" class="preview-box"></div>
             </div>
 
-            <aside class="card" style="display: flex; flex-direction: column; gap: 18px;">
+            <aside class="card" style="display: flex; flex-direction: column; gap: 16px;">
               <div>
-                <h3 style="font-size: 1.05rem; margin-bottom: 4px;">Share Short Link</h3>
-                <p style="font-size: 0.84rem; color: var(--text-secondary);">Left-click to copy • Middle-click to open in new tab.</p>
-                <div class="short-link-box" style="margin: 10px 0 8px;">
-                  <input type="text" id="shortUrlInput" class="short-link-input" value="${escapeHtml(file.shortUrl)}" readonly style="font-size: 0.88rem; cursor: pointer;" />
+                <div class="sidebar-label">Share</div>
+                <div class="short-link-box" style="margin: 6px 0 8px;">
+                  <input type="text" id="shortUrlInput" class="short-link-input" value="${escapeHtml(file.shortUrl)}" readonly style="font-size: 0.8rem;" />
                 </div>
-                <button type="button" id="copyBtn" class="btn btn-primary" style="width: 100%;">
-                  Copy Share Link
-                </button>
+                <button type="button" id="copyBtn" class="btn btn-primary" style="width: 100%;">Copy</button>
               </div>
 
-              <div style="border-top: 1px solid var(--border-subtle); padding-top: 14px;">
-                <h4 style="font-size: 0.92rem; margin-bottom: 4px;">Direct Media Link</h4>
-                <p style="font-size: 0.8rem; color: var(--text-secondary);">Raw HTTP 206 byte-range stream for Discord / embeds.</p>
-                <div class="short-link-box" style="margin: 8px 0;">
-                  <input type="text" id="directUrlInput" class="short-link-input" value="${escapeHtml(file.directUrl || file.rawUrl)}" readonly style="font-size: 0.82rem; cursor: pointer;" />
+              <div class="sidebar-section">
+                <div class="sidebar-label">Direct</div>
+                <div class="short-link-box" style="margin: 6px 0 8px;">
+                  <input type="text" id="directUrlInput" class="short-link-input" value="${escapeHtml(file.directUrl || file.rawUrl)}" readonly style="font-size: 0.78rem;" />
                 </div>
-                <button type="button" id="copyDirectBtn" class="btn btn-secondary" style="width: 100%;">
-                  Copy Direct URL
-                </button>
+                <button type="button" id="copyDirectBtn" class="btn btn-secondary" style="width: 100%;">Copy Direct</button>
               </div>
 
-              <div style="border-top: 1px solid var(--border-subtle); padding-top: 18px; text-align: center;">
-                <h4 style="font-size: 0.92rem; margin-bottom: 12px; color: var(--text-secondary);">QR Code</h4>
+              <div class="sidebar-section" style="text-align: center;">
                 <div class="qr-box" style="display: inline-block;">
-                  <img src="${file.qrCodeDataUrl}" alt="QR Code" style="width: 180px; height: 180px;" />
-                  <span>Scan with phone camera</span>
+                  <img src="${escapeHtml(file.qrCodeDataUrl)}" alt="QR Code" style="width: 160px; height: 160px;" />
                 </div>
-                <div style="margin-top: 12px;">
-                  <a href="${file.qrCodeDataUrl}" download="qr-${escapeHtml(file.code)}.png" class="btn btn-secondary" style="width: 100%;">
-                    Save QR Image
-                  </a>
+                <div style="margin-top: 10px;">
+                  <a href="${escapeHtml(file.qrCodeDataUrl)}" download="qr-${escapeHtml(file.code)}.png" class="btn btn-secondary btn-sm" style="width: 100%;">Save QR</a>
                 </div>
               </div>
             </aside>
@@ -443,12 +422,12 @@
         const shortInput = document.getElementById('shortUrlInput');
         const directInput = document.getElementById('directUrlInput');
         shortInput.addEventListener('click', () => copyText(file.shortUrl, 'Share link'));
-        shortInput.addEventListener('auxclick', (e) => { if (e.button === 1) window.open(file.shortUrl, '_blank'); });
-        directInput.addEventListener('click', () => copyText(file.directUrl || file.rawUrl, 'Direct URL'));
-        directInput.addEventListener('auxclick', (e) => { if (e.button === 1) window.open(file.directUrl || file.rawUrl, '_blank'); });
+        shortInput.addEventListener('auxclick', (e) => { if (e.button === 1) window.open(file.shortUrl, '_blank', 'noopener,noreferrer'); });
+        directInput.addEventListener('click', () => copyText(file.directUrl || file.rawUrl, 'Direct link'));
+        directInput.addEventListener('auxclick', (e) => { if (e.button === 1) window.open(file.directUrl || file.rawUrl, '_blank', 'noopener,noreferrer'); });
 
         document.getElementById('copyBtn').addEventListener('click', () => copyText(file.shortUrl, 'Share link'));
-        document.getElementById('copyDirectBtn').addEventListener('click', () => copyText(file.directUrl || file.rawUrl, 'Direct URL'));
+        document.getElementById('copyDirectBtn').addEventListener('click', () => copyText(file.directUrl || file.rawUrl, 'Direct link'));
         document.getElementById('downloadBtn').addEventListener('click', () => {
           const countEl = document.getElementById('downloadCount');
           if (countEl) {
@@ -464,30 +443,24 @@
 
     async function renderPreview(file, container) {
       const cat = file.previewCategory;
+      const safeRawUrl = escapeHtml(file.rawUrl);
+      const safeName = escapeHtml(file.originalName);
       if (cat === 'image') {
         container.innerHTML = `
           <div class="image-preview-wrapper">
             <div class="image-toolbar">
-              <span id="inlineResBadge" class="image-res-badge">Loading resolution...</span>
+              <span id="inlineResBadge" class="image-res-badge">...</span>
               <div class="image-toolbar-actions">
-                <button type="button" id="inlineZoomOut" class="btn btn-secondary btn-sm" title="Zoom Out">−</button>
+                <button type="button" id="inlineZoomOut" class="btn btn-secondary btn-sm">−</button>
                 <span id="inlineZoomLabel" class="zoom-indicator">100%</span>
-                <button type="button" id="inlineZoomIn" class="btn btn-secondary btn-sm" title="Zoom In">+</button>
+                <button type="button" id="inlineZoomIn" class="btn btn-secondary btn-sm">+</button>
                 <button type="button" id="inlineFitBtn" class="btn btn-secondary btn-sm">Fit</button>
-                <button type="button" id="inlineOrigBtn" class="btn btn-secondary btn-sm" title="View 1:1 Original Pixels">1:1 Original</button>
-                <button type="button" id="inlineFullscreenBtn" class="btn btn-primary btn-sm">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="15 3 21 3 21 9"/>
-                    <polyline points="9 21 3 21 3 15"/>
-                    <line x1="21" y1="3" x2="14" y2="10"/>
-                    <line x1="3" y1="21" x2="10" y2="14"/>
-                  </svg>
-                  Fullscreen (Original Res)
-                </button>
+                <button type="button" id="inlineOrigBtn" class="btn btn-secondary btn-sm">1:1</button>
+                <button type="button" id="inlineFullscreenBtn" class="btn btn-primary btn-sm">Fullscreen</button>
               </div>
             </div>
             <div id="inlineStage" class="inline-image-stage">
-              <img id="inlineImg" class="zoomable-img" src="${file.rawUrl}" alt="${escapeHtml(file.originalName)}" />
+              <img id="inlineImg" class="zoomable-img" src="${safeRawUrl}" alt="${safeName}" />
             </div>
           </div>
         `;
@@ -504,7 +477,7 @@
         });
 
         const initInlineImage = () => {
-          inlineResBadge.textContent = `${inlineImg.naturalWidth} × ${inlineImg.naturalHeight} px (Original)`;
+          inlineResBadge.textContent = `${inlineImg.naturalWidth} × ${inlineImg.naturalHeight}`;
           inlineController.fitToStage();
         };
         if (inlineImg.complete && inlineImg.naturalWidth) {
@@ -519,38 +492,27 @@
         document.getElementById('inlineOrigBtn').addEventListener('click', () => inlineController.setOriginalResolution());
         document.getElementById('inlineFullscreenBtn').addEventListener('click', () => openFullscreenViewer(file, true));
       } else if (cat === 'video') {
-        container.innerHTML = `<video controls preload="metadata" src="${file.rawUrl}"></video>`;
+        container.innerHTML = `<video controls preload="metadata" src="${safeRawUrl}"></video>`;
       } else if (cat === 'audio') {
-        container.innerHTML = `<audio controls preload="metadata" src="${file.rawUrl}"></audio>`;
+        container.innerHTML = `<audio controls preload="metadata" src="${safeRawUrl}"></audio>`;
       } else if (cat === 'pdf') {
-        container.innerHTML = `<iframe src="${file.rawUrl}" title="${escapeHtml(file.originalName)}"></iframe>`;
+        container.innerHTML = `<iframe src="${safeRawUrl}" title="${safeName}"></iframe>`;
       } else if (cat === 'text' && file.size <= 2 * 1024 * 1024) {
-        container.innerHTML = `<div class="preview-text">Loading text preview...</div>`;
+        container.innerHTML = `<div class="preview-text">Loading...</div>`;
         try {
           const res = await fetch(file.rawUrl);
           const text = await res.text();
           const pre = container.querySelector('.preview-text');
           pre.textContent = text.slice(0, 100000);
         } catch {
-          container.innerHTML = `<div class="preview-fallback">Preview unavailable. Click Download File above.</div>`;
+          container.innerHTML = `<div class="preview-fallback">Preview unavailable</div>`;
         }
       } else {
-        container.innerHTML = `
-          <div class="preview-fallback">
-            <div class="dropzone-icon" style="margin-bottom: 12px;">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-              </svg>
-            </div>
-            <p style="font-weight: 600; color: var(--text-primary); margin-bottom: 4px;">${escapeHtml(file.originalName)}</p>
-            <p style="font-size: 0.88rem;">Direct preview is not available for this file type. Use the Download button above.</p>
-          </div>
-        `;
+        container.innerHTML = `<div class="preview-fallback">${safeName}</div>`;
       }
     }
 
     loadSharedFile();
-</script>
+  </script>
 </body>
 </html>

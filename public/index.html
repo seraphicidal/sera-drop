@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>sera.drop — Upload, Deduplicate &amp; Share Files Instantly</title>
+  <title>sera.drop</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -11,58 +11,48 @@
     <header class="navbar">
       <a href="/" class="brand">
         <div class="brand-icon">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter">
+            <path d="M21 15v4H3v-4"/>
             <polyline points="17 8 12 3 7 8"/>
             <line x1="12" y1="3" x2="12" y2="15"/>
           </svg>
         </div>
-        <span>sera.drop</span>
+        <span>sera<span class="brand-dot">.</span>drop</span>
       </a>
-      <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-        <a id="publicUrlBadge" href="#" target="_blank" class="nav-badge" style="display: none; border-color: rgba(16, 185, 129, 0.45); color: #34d399; background: rgba(16, 185, 129, 0.1);">
-          ● Public Link Active
-        </a>
-        <span id="storageBadge" class="nav-badge">Up to 500 MB per file</span>
-        <a href="/api/sharex.sxcu" class="nav-badge nav-badge-interactive" title="Download ShareX Custom Uploader (.sxcu) for instant screenshot/file uploads">
-          ⬇ ShareX (.sxcu)
-        </a>
+      <div class="nav-meta">
+        <a id="publicUrlBadge" href="#" target="_blank" rel="noopener noreferrer" class="nav-badge nav-badge-active" style="display: none;"></a>
+        <span id="storageBadge" class="nav-badge"><span>0 B / 5 GB</span><span>Max 500 MB/file</span></span>
+        <a href="/api/sharex.sxcu" class="nav-badge nav-badge-interactive">ShareX</a>
       </div>
     </header>
 
-    <section class="hero">
-      <h1>Drop files, get instant short &amp; direct links</h1>
-      <p>1:1 lossless hosting with SHA-256 deduplication, Litterbox ephemeral timers, signed URLs, and shareable albums.</p>
-    </section>
-
     <main>
       <div class="card">
-
         <div class="options-bar">
           <div class="option-group">
-            <label for="ttlSelect">Retention (TTL)</label>
+            <label for="ttlSelect">Retention</label>
             <select id="ttlSelect" class="control-select">
-              <option value="permanent">Permanent (Catbox)</option>
-              <option value="1h">1 Hour (Litterbox)</option>
-              <option value="12h">12 Hours (Litterbox)</option>
-              <option value="24h">24 Hours (Litterbox)</option>
-              <option value="72h">3 Days / 72h (Litterbox)</option>
+              <option value="permanent">Permanent</option>
+              <option value="1h">1h</option>
+              <option value="12h">12h</option>
+              <option value="24h">24h</option>
+              <option value="72h">72h</option>
             </select>
           </div>
 
           <div class="option-group">
-            <label for="codeLengthSelect">Code Entropy</label>
+            <label for="codeLengthSelect">Code</label>
             <select id="codeLengthSelect" class="control-select">
-              <option value="8">8 Chars (sera.drop Default)</option>
-              <option value="6">6 Chars (Catbox Compact)</option>
-              <option value="16">16 Chars (High Entropy)</option>
+              <option value="8">8 chars</option>
+              <option value="6">6 chars</option>
+              <option value="16">16 chars</option>
             </select>
           </div>
 
           <div class="option-group option-checkbox">
-            <label class="checkbox-label" title="Require expiring OpenResty-style ?md5=...&expires=... signatures on raw & download URLs">
+            <label class="checkbox-label">
               <input type="checkbox" id="signedUrlToggle" />
-              <span>🔒 Expiring Signed URLs (240s anti-hotlink)</span>
+              <span>Signed URL (240s)</span>
             </label>
           </div>
         </div>
@@ -70,15 +60,15 @@
         <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload file dropzone">
           <input type="file" id="fileInput" multiple hidden />
           <div class="dropzone-icon">
-            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="square" stroke-linejoin="miter">
+              <path d="M21 15v4H3v-4"/>
               <polyline points="17 8 12 3 7 8"/>
               <line x1="12" y1="3" x2="12" y2="15"/>
             </svg>
           </div>
-          <h2>Drag &amp; drop files here</h2>
-          <p>or click to browse multiple files (paste with Ctrl+V • SHA-256 deduplicated)</p>
-          <button type="button" class="btn btn-primary" id="browseBtn">Choose Files</button>
+          <h2>Drop files or click to browse</h2>
+          <p>Paste with Ctrl+V</p>
+          <button type="button" class="btn btn-primary" id="browseBtn">Select Files</button>
         </div>
 
         <div class="url-upload-bar">
@@ -86,14 +76,14 @@
             type="url"
             id="remoteUrlInput"
             class="control-input"
-            placeholder="Or paste a direct remote media URL (https://example.com/image.png) to fetch..."
+            placeholder="https://example.com/file.png"
           />
-          <button type="button" id="remoteUrlBtn" class="btn btn-secondary">Fetch URL</button>
+          <button type="button" id="remoteUrlBtn" class="btn btn-secondary">Fetch</button>
         </div>
 
         <div id="progressWrapper" class="progress-wrapper">
           <div class="progress-header">
-            <span id="progressFileName">Uploading...</span>
+            <span id="progressFileName">Uploading</span>
             <span id="progressPercent">0%</span>
           </div>
           <div class="progress-track">
@@ -104,83 +94,66 @@
 
       <div id="resultCard" class="card result-card">
         <div style="min-width: 0;">
-          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;">
-            <span class="badge-success" style="margin-bottom: 0;">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-              Ready to share
-            </span>
-            <span id="resultDedupeBadge" class="meta-pill pill-emerald" style="display: none;">⚡ SHA-256 Deduplicated</span>
-            <span id="resultTtlBadge" class="meta-pill pill-amber" style="display: none;">⏱ Ephemeral</span>
-            <span id="resultSignedBadge" class="meta-pill pill-indigo" style="display: none;">🔒 Signed URL</span>
+          <div class="result-badges">
+            <span class="badge-success">Ready</span>
+            <span id="resultDedupeBadge" class="meta-pill pill-mono" style="display: none;">Deduplicated</span>
+            <span id="resultTtlBadge" class="meta-pill pill-crimson" style="display: none;">Ephemeral</span>
+            <span id="resultSignedBadge" class="meta-pill pill-crimson" style="display: none;">Signed</span>
           </div>
 
-          <h2 id="resultFileName" style="font-size: 1.3rem; word-break: break-all;">filename.ext</h2>
-          <p id="resultFileMeta" style="color: var(--text-secondary); font-size: 0.88rem; margin-top: 2px;">0 KB</p>
+          <h2 id="resultFileName" style="font-size: 1.15rem; font-weight: 500; word-break: break-all;">filename.ext</h2>
+          <div id="resultFileMeta" class="file-sub" style="margin-top: 4px;"></div>
 
-          <div class="short-link-box" title="Left-click input to copy • Middle-click to open in new tab">
+          <div class="short-link-box">
             <span class="link-prefix-tag">Share</span>
             <input type="text" id="resultShortUrl" class="short-link-input" readonly />
             <button type="button" id="copyResultBtn" class="btn btn-primary btn-sm">Copy</button>
           </div>
 
-          <div class="short-link-box" style="margin-top: 8px;" title="Direct raw file link (Discord / <video> / <img> embed ready)">
+          <div class="short-link-box" style="margin-top: 6px;">
             <span class="link-prefix-tag">Direct</span>
             <input type="text" id="resultDirectUrl" class="short-link-input" readonly />
-            <button type="button" id="copyDirectBtn" class="btn btn-secondary btn-sm">Copy Direct</button>
+            <button type="button" id="copyDirectBtn" class="btn btn-secondary btn-sm">Copy</button>
           </div>
 
-          <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px;">
-            <a id="openSharePageBtn" href="#" target="_blank" class="btn btn-secondary">
-              Open Share Page
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                <polyline points="15 3 21 3 21 9"/>
-                <line x1="10" y1="14" x2="21" y2="3"/>
-              </svg>
-            </a>
-            <a id="downloadQrBtn" href="#" download="sera-drop-qr.png" class="btn btn-secondary">
-              Download QR Code
-            </a>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px;">
+            <a id="openSharePageBtn" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm">Open</a>
+            <a id="downloadQrBtn" href="#" download="sera-drop-qr.png" class="btn btn-secondary btn-sm">QR</a>
           </div>
         </div>
 
         <div class="qr-box">
-          <img id="resultQrImage" src="" alt="QR Code for short link" />
-          <span>Scan to open</span>
+          <img id="resultQrImage" src="" alt="QR Code" />
         </div>
       </div>
 
       <div class="section-header">
-        <div>
-          <h3>Shared Files</h3>
-          <span id="fileCountLabel" style="color: var(--text-secondary); font-size: 0.85rem;">0 files</span>
+        <div class="section-title-group">
+          <h3>Files</h3>
+          <span id="fileCountLabel" class="section-count">0</span>
         </div>
-        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+        <div class="album-controls">
           <input
             type="text"
             id="albumTitleInput"
             class="control-input"
-            style="width: 210px; padding: 7px 12px; font-size: 0.85rem;"
-            placeholder="Album title (optional)..."
+            style="width: 190px; padding: 5px 10px; font-size: 0.76rem;"
+            placeholder="Album title"
           />
-          <button type="button" id="createAlbumBtn" class="btn btn-secondary btn-sm">
-            + Create Album (/c/...)
-          </button>
+          <button type="button" id="createAlbumBtn" class="btn btn-secondary btn-sm">Create Album</button>
         </div>
       </div>
 
-      <div id="albumResultBanner" class="card album-banner" style="display: none; margin-bottom: 16px;">
-        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
-          <div>
-            <span class="meta-pill pill-indigo">Album Created</span>
-            <strong id="albumResultTitle" style="margin-left: 8px;">Album</strong>
-            <a id="albumResultLink" href="#" target="_blank" style="margin-left: 10px; color: #a5b4fc; font-family: monospace; font-weight: 600;"></a>
+      <div id="albumResultBanner" class="card album-banner" style="display: none;">
+        <div class="album-banner-inner">
+          <div class="album-banner-info">
+            <span class="meta-pill pill-crimson">Album</span>
+            <strong id="albumResultTitle" style="font-size: 0.88rem; font-weight: 500;">Album</strong>
+            <a id="albumResultLink" href="#" target="_blank" rel="noopener noreferrer" class="album-banner-link"></a>
           </div>
-          <div style="display: flex; gap: 8px;">
-            <button type="button" id="copyAlbumBtn" class="btn btn-primary btn-sm">Copy Album Link</button>
-            <a id="openAlbumBtn" href="#" target="_blank" class="btn btn-secondary btn-sm">Open Album</a>
+          <div style="display: flex; gap: 6px;">
+            <button type="button" id="copyAlbumBtn" class="btn btn-primary btn-sm">Copy</button>
+            <a id="openAlbumBtn" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm">Open</a>
           </div>
         </div>
       </div>
@@ -189,7 +162,7 @@
     </main>
   </div>
 
-  <div id="toast" class="toast">Copied to clipboard!</div>
+  <div id="toast" class="toast">Copied</div>
 
   <script>
     const dropzone = document.getElementById('dropzone');
@@ -233,13 +206,14 @@
 
     let currentLoadedFiles = [];
     const selectedForAlbum = new Set();
+    let statusPollAttempts = 0;
 
     let toastTimer = null;
     function showToast(msg) {
       toast.textContent = msg;
       toast.classList.add('show');
       clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
     }
 
     function formatBytes(bytes) {
@@ -265,9 +239,9 @@
       const diffMs = new Date(expiresAt).getTime() - Date.now();
       if (diffMs <= 0) return 'Expired';
       const mins = Math.ceil(diffMs / 60000);
-      if (mins < 60) return `${mins}m left`;
+      if (mins < 60) return `${mins}m`;
       const hrs = (diffMs / 3600000).toFixed(1);
-      return `${hrs}h left`;
+      return `${hrs}h`;
     }
 
     function getExtBadge(filename) {
@@ -313,7 +287,7 @@
     async function copyText(text, label = 'Link') {
       try {
         await navigator.clipboard.writeText(text);
-        showToast(`${label} copied to clipboard!`);
+        showToast(`${label} copied`);
       } catch {
         const input = document.createElement('input');
         input.value = text;
@@ -321,7 +295,7 @@
         input.select();
         document.execCommand('copy');
         document.body.removeChild(input);
-        showToast(`${label} copied to clipboard!`);
+        showToast(`${label} copied`);
       }
     }
 
@@ -330,16 +304,23 @@
       el.addEventListener('auxclick', (e) => {
         if (e.button === 1) {
           e.preventDefault();
-          window.open(getUrl(), '_blank');
+          window.open(getUrl(), '_blank', 'noopener,noreferrer');
         }
       });
     }
 
     bindCatboxClickBehavior(resultShortUrl, () => resultShortUrl.value, 'Share link');
-    bindCatboxClickBehavior(resultDirectUrl, () => resultDirectUrl.value, 'Direct file link');
+    bindCatboxClickBehavior(resultDirectUrl, () => resultDirectUrl.value, 'Direct link');
 
     dropzone.addEventListener('click', (e) => {
       if (e.target !== fileInput) {
+        fileInput.click();
+      }
+    });
+
+    dropzone.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
         fileInput.click();
       }
     });
@@ -393,7 +374,7 @@
         formData.append('requireSignedUrl', String(signedUrlToggle.checked));
         formData.append('file', file);
 
-        progressFileName.textContent = `Uploading ${file.name}...`;
+        progressFileName.textContent = file.name;
         progressPercent.textContent = '0%';
         progressFill.style.width = '0%';
         progressWrapper.classList.add('active');
@@ -420,11 +401,7 @@
             displayResult(data);
             loadFiles();
             checkPublicStatus();
-            showToast(
-              data.deduplicated
-                ? 'Instant SHA-256 deduplicated match! Link ready.'
-                : 'File uploaded! Links are ready.'
-            );
+            showToast(data.deduplicated ? 'Deduplicated' : 'Uploaded');
           } else {
             let errMsg = 'Upload failed';
             try {
@@ -437,7 +414,7 @@
 
         xhr.onerror = () => {
           progressWrapper.classList.remove('active');
-          showToast('Network error while uploading file');
+          showToast('Network error');
           resolve();
         };
 
@@ -448,11 +425,11 @@
     async function uploadRemoteUrl() {
       const url = remoteUrlInput.value.trim();
       if (!url) {
-        showToast('Enter a valid http:// or https:// URL first');
+        showToast('Enter a valid URL');
         return;
       }
       remoteUrlBtn.disabled = true;
-      remoteUrlBtn.textContent = 'Fetching...';
+      remoteUrlBtn.textContent = '...';
       try {
         const res = await fetch('/api/url-upload', {
           method: 'POST',
@@ -469,7 +446,7 @@
         });
         const data = await res.json();
         if (!res.ok) {
-          showToast(data.error || 'Remote URL upload failed');
+          showToast(data.error || 'Fetch failed');
           return;
         }
         remoteUrlInput.value = '';
@@ -479,12 +456,12 @@
         displayResult(data);
         loadFiles();
         checkPublicStatus();
-        showToast('Remote URL fetched & stored!');
-      } catch (err) {
-        showToast('Network error fetching remote URL');
+        showToast('Uploaded');
+      } catch {
+        showToast('Network error');
       } finally {
         remoteUrlBtn.disabled = false;
-        remoteUrlBtn.textContent = 'Fetch URL';
+        remoteUrlBtn.textContent = 'Fetch';
       }
     }
 
@@ -498,11 +475,17 @@
 
     function displayResult(item) {
       resultFileName.textContent = item.originalName;
-      const hashShort = item.sha256 ? ` • SHA-256: ${item.sha256.slice(0, 12)}…` : '';
-      resultFileMeta.textContent = `${formatBytes(item.size)} • Code: ${item.code}${hashShort}`;
+      const metaParts = [
+        `<span>${escapeHtml(formatBytes(item.size))}</span>`,
+        `<span>${escapeHtml(item.code)}</span>`
+      ];
+      if (item.sha256) {
+        metaParts.push(`<span>${escapeHtml(item.sha256.slice(0, 12))}</span>`);
+      }
+      resultFileMeta.innerHTML = metaParts.join('');
       resultShortUrl.value = item.shortUrl;
       resultDirectUrl.value = item.directUrl || item.rawUrl;
-      openSharePageBtn.href = `/s/${item.code}`;
+      openSharePageBtn.href = `/s/${encodeURIComponent(item.code)}`;
       resultQrImage.src = item.qrCodeDataUrl;
       downloadQrBtn.href = item.qrCodeDataUrl;
       downloadQrBtn.download = `qr-${item.code}.png`;
@@ -510,7 +493,7 @@
       resultDedupeBadge.style.display = item.deduplicated ? 'inline-flex' : 'none';
       if (item.expiresAt) {
         resultTtlBadge.style.display = 'inline-flex';
-        resultTtlBadge.textContent = `⏱ ${formatRemainingTtl(item.expiresAt)} (${item.ttl})`;
+        resultTtlBadge.textContent = `${formatRemainingTtl(item.expiresAt)}`;
       } else {
         resultTtlBadge.style.display = 'none';
       }
@@ -529,11 +512,11 @@
           : currentLoadedFiles.map((f) => f.code);
 
       if (!codesToInclude.length) {
-        showToast('Upload or select at least one file to create an album');
+        showToast('Select at least one file');
         return;
       }
 
-      const title = albumTitleInput.value.trim() || `sera.drop Album (${codesToInclude.length} files)`;
+      const title = albumTitleInput.value.trim() || `Album (${codesToInclude.length})`;
       createAlbumBtn.disabled = true;
       try {
         const res = await fetch('/api/albums', {
@@ -544,7 +527,7 @@
           },
           body: JSON.stringify({
             title,
-            description: `Created with sera.drop • ${codesToInclude.length} file(s)`,
+            description: `${codesToInclude.length} files`,
             files: codesToInclude
           })
         });
@@ -555,10 +538,10 @@
         }
         albumTitleInput.value = '';
         selectedForAlbum.clear();
-        albumResultTitle.textContent = `${data.title} (${data.files.length} files)`;
+        albumResultTitle.textContent = `${data.title} (${data.files.length})`;
         albumResultLink.textContent = data.albumUrl;
-        albumResultLink.href = `/c/${data.short}`;
-        openAlbumBtn.href = `/c/${data.short}`;
+        albumResultLink.href = `/c/${encodeURIComponent(data.short)}`;
+        openAlbumBtn.href = `/c/${encodeURIComponent(data.short)}`;
         copyAlbumBtn.onclick = () => copyText(data.albumUrl, 'Album link');
         albumResultBanner.style.display = 'block';
         copyText(data.albumUrl, 'Album link');
@@ -586,11 +569,11 @@
       if (res.ok) {
         removeOwnedFileToken(code);
         selectedForAlbum.delete(code);
-        showToast('File removed');
+        showToast('Deleted');
         loadFiles();
         checkPublicStatus();
       } else {
-        showToast('Unauthorized to delete this file');
+        showToast('Unauthorized');
       }
     }
 
@@ -601,14 +584,10 @@
         const res = await fetch(`/api/files${query}`);
         const files = await res.json();
         currentLoadedFiles = Array.isArray(files) ? files : [];
-        fileCountLabel.textContent = `${currentLoadedFiles.length} ${currentLoadedFiles.length === 1 ? 'file' : 'files'}`;
+        fileCountLabel.textContent = `${currentLoadedFiles.length}`;
 
         if (currentLoadedFiles.length === 0) {
-          fileList.innerHTML = `
-            <div class="card" style="text-align: center; color: var(--text-secondary); padding: 32px;">
-              No shared files yet. Upload a file or remote URL above to generate your first short link!
-            </div>
-          `;
+          fileList.innerHTML = `<div class="card empty-state">No files</div>`;
           return;
         }
 
@@ -620,29 +599,18 @@
           const safeBadge = escapeHtml(rawBadge);
           const safeCode = escapeHtml(f.code);
           const isExec = execExts.has(rawBadge);
-          const warnTag = isExec
-            ? `<span style="color: #f87171; font-weight: 600;">⚠ Executable</span><span>•</span>`
-            : '';
-          const dedupeTag = f.deduplicated
-            ? `<span style="color: #34d399; font-weight: 600;" title="Stored via SHA-256 deduplication">⚡ Dedupe</span><span>•</span>`
-            : '';
+          const warnTag = isExec ? `<span class="tag-warn">Executable</span>` : '';
+          const dedupeTag = f.deduplicated ? `<span class="tag-mono">Dedupe</span>` : '';
           const ttlRemaining = formatRemainingTtl(f.expiresAt);
-          const ttlTag = ttlRemaining
-            ? `<span style="color: #fbbf24; font-weight: 600;">⏱ ${escapeHtml(ttlRemaining)}</span><span>•</span>`
-            : '';
-          const signedTag = f.requireSignedUrl
-            ? `<span style="color: #a5b4fc; font-weight: 600;">🔒 Signed</span><span>•</span>`
-            : '';
-          const sourceTag = f.uploadedFrom === 'public'
-            ? `<span>Public upload</span><span>•</span>`
-            : '';
+          const ttlTag = ttlRemaining ? `<span class="tag-accent">${escapeHtml(ttlRemaining)}</span>` : '';
+          const signedTag = f.requireSignedUrl ? `<span class="tag-accent">Signed</span>` : '';
           const checkedAttr = selectedForAlbum.has(f.code) ? 'checked' : '';
 
           const row = document.createElement('div');
           row.className = 'file-item';
           row.innerHTML = `
             <div class="file-meta">
-              <input type="checkbox" class="album-check" data-code="${safeCode}" ${checkedAttr} title="Select for Album" />
+              <input type="checkbox" class="album-check" data-code="${safeCode}" ${checkedAttr} aria-label="Select for Album" />
               <div class="file-type-badge">${safeBadge}</div>
               <div class="file-info">
                 <div class="file-name" title="${safeName}">${safeName}</div>
@@ -651,22 +619,18 @@
                   ${dedupeTag}
                   ${ttlTag}
                   ${signedTag}
-                  ${sourceTag}
-                  <span>${formatBytes(f.size)}</span>
-                  <span>•</span>
-                  <span>${f.downloads} ${f.downloads === 1 ? 'download' : 'downloads'}</span>
-                  <span>•</span>
-                  <span>${formatDate(f.createdAt)}</span>
-                  <span>•</span>
-                  <a href="/s/${safeCode}" style="color: #818cf8; font-weight: 600;">/s/${safeCode}</a>
+                  <span>${escapeHtml(formatBytes(f.size))}</span>
+                  <span>${Number(f.downloads) || 0} dl</span>
+                  <span>${escapeHtml(formatDate(f.createdAt))}</span>
+                  <a href="/s/${safeCode}" class="file-code-link">/s/${safeCode}</a>
                 </div>
               </div>
             </div>
             <div class="file-actions">
-              <button type="button" class="btn btn-secondary btn-sm copy-btn" title="Left-click: Copy Share Link • Middle-click: Open">Copy Link</button>
-              <button type="button" class="btn btn-secondary btn-sm copy-direct-btn" title="Left-click: Copy Direct Media URL • Middle-click: Open">Direct URL</button>
+              <button type="button" class="btn btn-secondary btn-sm copy-btn">Copy</button>
+              <button type="button" class="btn btn-secondary btn-sm copy-direct-btn">Direct</button>
               <a href="/s/${safeCode}" class="btn btn-secondary btn-sm">Preview</a>
-              <button type="button" class="btn btn-danger btn-sm delete-btn" title="Delete file">Delete</button>
+              <button type="button" class="btn btn-danger btn-sm delete-btn">Delete</button>
             </div>
           `;
 
@@ -683,7 +647,7 @@
           bindCatboxClickBehavior(
             row.querySelector('.copy-direct-btn'),
             () => f.directUrl || f.rawUrl,
-            'Direct media URL'
+            'Direct link'
           );
           row.querySelector('.delete-btn').addEventListener('click', () => deleteFile(f.code));
           fileList.appendChild(row);
@@ -699,13 +663,16 @@
         const data = await res.json();
         const badge = document.getElementById('publicUrlBadge');
         if (typeof data.storageUsedBytes === 'number') {
-          storageBadge.textContent = `${formatBytes(data.storageUsedBytes)} / 5 GB used • Max 500 MB/file`;
+          storageBadge.innerHTML = `<span>${escapeHtml(formatBytes(data.storageUsedBytes))} / 5 GB</span><span>Max 500 MB/file</span>`;
         }
-        if (data.publicUrl) {
+        const isLocalHost =
+          window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+        if (data.publicUrl && isLocalHost) {
           badge.href = data.publicUrl;
-          badge.textContent = `● Public: ${data.publicUrl.replace(/^https?:\/\//, '')}`;
+          badge.textContent = data.publicUrl.replace(/^https?:\/\//, '');
           badge.style.display = 'inline-flex';
-        } else {
+        } else if (!data.publicUrl && data.tunnelEnabled && statusPollAttempts < 15) {
+          statusPollAttempts += 1;
           setTimeout(checkPublicStatus, 2000);
         }
       } catch {}
@@ -713,6 +680,6 @@
 
     loadFiles();
     checkPublicStatus();
-</script>
+  </script>
 </body>
 </html>

@@ -21,15 +21,12 @@ const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'files.json');
 const ALBUMS_FILE = path.join(DATA_DIR, 'albums.json');
 const PID_FILE = path.join(DATA_DIR, 'server.pid');
+const SECRET_FILE = path.join(DATA_DIR, 'secret.key');
 
 const MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024;
 const MAX_GIF_SIZE_BYTES = 50 * 1024 * 1024;
 const MAX_TOTAL_STORAGE_BYTES = 5 * 1024 * 1024 * 1024;
 const MAX_CONCURRENT_UPLOADS = 5;
-
-const SECURE_LINK_SECRET =
-  process.env.SERA_DROP_SECRET ||
-  crypto.createHash('sha256').update(__dirname + '-sera-drop-secure-link').digest('hex');
 const SIGNED_URL_TTL_SECONDS = 240;
 
 const TTL_PRESETS_MS = {
@@ -40,17 +37,49 @@ const TTL_PRESETS_MS = {
 };
 
 const BLOCKED_PUBLIC_EXTENSIONS = new Set([
-  '.exe', '.scr', '.cpl', '.jar', '.msi', '.bat', '.cmd', '.com', '.vbs', '.lnk', '.htaccess'
+  '.exe', '.scr', '.cpl', '.jar', '.msi', '.msp', '.mst', '.bat', '.cmd', '.com',
+  '.vbs', '.vbe', '.wsf', '.wsh', '.hta', '.reg', '.dll', '.sys', '.drv', '.pif',
+  '.gadget', '.application', '.lnk', '.htaccess', '.php', '.phtml', '.phar', '.asp', '.aspx', '.jsp'
 ]);
+
 const BLOCKED_PUBLIC_MIMES = new Set([
   'application/x-msdownload',
   'application/exe',
   'application/x-dosexec',
-  'application/x-msdos-program'
+  'application/x-msdos-program',
+  'application/x-ms-shortcut',
+  'application/x-msi',
+  'application/hta'
 ]);
 
 const XSS_SENSITIVE_EXTENSIONS = new Set([
-  '.html', '.htm', '.svg', '.xml', '.xhtml', '.php', '.phtml', '.js', '.mjs', '.cjs', '.htaccess'
+  '.html', '.htm', '.xhtml', '.shtml', '.svg', '.svgz', '.xml', '.xsl', '.xslt',
+  '.php', '.phtml', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.vue',
+  '.htaccess', '.mht', '.mhtml', '.swf'
+]);
+
+const SAFE_INLINE_MEDIA_MIMES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+  'image/bmp',
+  'image/x-icon',
+  'video/mp4',
+  'video/webm',
+  'video/ogg',
+  'video/quicktime',
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/ogg',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/webm',
+  'audio/flac',
+  'audio/aac',
+  'audio/mp4',
+  'application/pdf'
 ]);
 
 let activeUploads = 0;
@@ -67,17 +96,51 @@ if (!fs.existsSync(ALBUMS_FILE)) {
   fs.writeFileSync(ALBUMS_FILE, JSON.stringify({}, null, 2), 'utf8');
 }
 
+function loadOrCreateSecret() {
+  if (process.env.SERA_DROP_SECRET && String(process.env.SERA_DROP_SECRET).trim().length >= 16) {
+    return String(process.env.SERA_DROP_SECRET).trim();
+  }
+  try {
+    if (fs.existsSync(SECRET_FILE)) {
+      const existing = fs.readFileSync(SECRET_FILE, 'utf8').trim();
+      if (existing.length >= 32) {
+        return existing;
+      }
+    }
+    const generated = crypto.randomBytes(32).toString('hex');
+    fs.writeFileSync(SECRET_FILE, generated, { encoding: 'utf8', mode: 0o600 });
+    return generated;
+  } catch {
+    return crypto.randomBytes(32).toString('hex');
+  }
+}
+
+const SECURE_LINK_SECRET = loadOrCreateSecret();
+
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+  );
   next();
 });
+
+function getClientIp(req) {
+  if (process.env.TRUST_CF_HEADERS === 'true' && typeof req.headers['cf-connecting-ip'] === 'string') {
+    return req.headers['cf-connecting-ip'].trim();
+  }
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
 
 function createRateLimiter({ windowMs, maxRequests, message }) {
   const buckets = new Map();
   return (req, res, next) => {
-    const ip = req.headers['cf-connecting-ip'] || req.ip || 'unknown';
+    const ip = getClientIp(req);
     const now = Date.now();
 
     if (buckets.size > 2000) {
@@ -121,18 +184,29 @@ function requireCsrfHeader(req, res, next) {
   next();
 }
 
+function sanitizeMapObject(parsed) {
+  const clean = {};
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return clean;
+  }
+  for (const [k, v] of Object.entries(parsed)) {
+    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+    clean[k] = v;
+  }
+  return clean;
+}
+
 function loadDatabase() {
   try {
     const raw = fs.readFileSync(DB_FILE, 'utf8');
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch (err) {
+    return sanitizeMapObject(JSON.parse(raw));
+  } catch {
     return {};
   }
 }
 
 function saveDatabase(db) {
-  const tmpFile = `${DB_FILE}.${process.pid}.tmp`;
+  const tmpFile = `${DB_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   fs.writeFileSync(tmpFile, JSON.stringify(db, null, 2), 'utf8');
   fs.renameSync(tmpFile, DB_FILE);
 }
@@ -140,17 +214,25 @@ function saveDatabase(db) {
 function loadAlbums() {
   try {
     const raw = fs.readFileSync(ALBUMS_FILE, 'utf8');
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch (err) {
+    return sanitizeMapObject(JSON.parse(raw));
+  } catch {
     return {};
   }
 }
 
 function saveAlbums(albums) {
-  const tmpFile = `${ALBUMS_FILE}.${process.pid}.tmp`;
+  const tmpFile = `${ALBUMS_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   fs.writeFileSync(tmpFile, JSON.stringify(albums, null, 2), 'utf8');
   fs.renameSync(tmpFile, ALBUMS_FILE);
+}
+
+function safeUnlink(filePath) {
+  if (!filePath) return;
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch {}
 }
 
 function isStoredFileReferenced(db, storedName, excludeCode = null) {
@@ -174,12 +256,7 @@ function reapExpiredFiles() {
         delete db[code];
         changed = true;
         if (storedName && !isStoredFileReferenced(db, storedName, code)) {
-          const filePath = path.join(UPLOADS_DIR, path.basename(storedName));
-          if (fs.existsSync(filePath)) {
-            try {
-              fs.unlinkSync(filePath);
-            } catch {}
-          }
+          safeUnlink(path.join(UPLOADS_DIR, path.basename(storedName)));
         }
       }
     }
@@ -252,6 +329,14 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(String(token)).digest('hex');
 }
 
+function safeTimingEqualStrings(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 function computeFileSha256(filePath) {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
@@ -279,9 +364,7 @@ function verifySecureLink(uriPath, md5Param, expiresParam) {
     return { ok: false, reason: 'Signed link has expired' };
   }
   const expected = computeSecureLinkMd5(uriPath, expires);
-  const a = Buffer.from(expected);
-  const b = Buffer.from(String(md5Param));
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+  if (!safeTimingEqualStrings(expected, String(md5Param))) {
     return { ok: false, reason: 'Invalid secure_link MD5 signature' };
   }
   return { ok: true, reason: 'OK' };
@@ -319,7 +402,17 @@ function getSafeExtension(filename) {
   return '';
 }
 
+function buildContentDisposition(dispositionType, filename) {
+  const clean = String(filename || 'file').replace(/[\r\n"\\]/g, '_');
+  const asciiFallback = clean.replace(/[^\x20-\x7e]/g, '_') || 'file';
+  const encoded = encodeURIComponent(clean);
+  return `${dispositionType}; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
+}
+
 function validateUploadPolicy({ originalName, mimeType, size, isLocal }) {
+  if (!Number.isFinite(size) || size <= 0) {
+    return 'File is empty.';
+  }
   const ext = getSafeExtension(originalName);
   const lowerName = (originalName || '').toLowerCase();
   const lowerMime = (mimeType || '').toLowerCase();
@@ -345,6 +438,9 @@ function detectPreviewCategory(mimeType, filename) {
   const mime = (mimeType || '').toLowerCase();
   const ext = path.extname(filename || '').toLowerCase();
 
+  if (XSS_SENSITIVE_EXTENSIONS.has(ext) || mime.includes('svg') || mime.includes('html') || mime.includes('xml')) {
+    return 'text';
+  }
   if (mime.startsWith('image/')) return 'image';
   if (mime.startsWith('video/')) return 'video';
   if (mime.startsWith('audio/')) return 'audio';
@@ -466,7 +562,7 @@ async function buildFileResponse(req, record) {
     width: 280,
     margin: 2,
     color: {
-      dark: '#0f172a',
+      dark: '#000000',
       light: '#ffffff'
     }
   });
@@ -519,19 +615,16 @@ async function registerUploadedFile({
     isLocal
   });
   if (policyError) {
-    if (fs.existsSync(tempFilePath)) {
-      try {
-        fs.unlinkSync(tempFilePath);
-      } catch {}
-    }
+    safeUnlink(tempFilePath);
     const err = new Error(policyError);
-    err.statusCode = 415;
+    err.statusCode = size <= 0 ? 400 : 415;
     throw err;
   }
 
+  const sha256 = await computeFileSha256(tempFilePath);
+
   reapExpiredFiles();
   const db = loadDatabase();
-  const sha256 = await computeFileSha256(tempFilePath);
 
   let storedName = path.basename(tempFilePath);
   let deduplicated = false;
@@ -543,11 +636,8 @@ async function registerUploadedFile({
       existing.storedName &&
       fs.existsSync(path.join(UPLOADS_DIR, path.basename(existing.storedName)))
     ) {
-
       if (path.basename(existing.storedName) !== storedName) {
-        try {
-          fs.unlinkSync(tempFilePath);
-        } catch {}
+        safeUnlink(tempFilePath);
       }
       storedName = path.basename(existing.storedName);
       deduplicated = true;
@@ -556,11 +646,7 @@ async function registerUploadedFile({
   }
 
   if (!deduplicated && getTotalStorageUsed(db) + size > MAX_TOTAL_STORAGE_BYTES) {
-    if (fs.existsSync(tempFilePath)) {
-      try {
-        fs.unlinkSync(tempFilePath);
-      } catch {}
-    }
+    safeUnlink(tempFilePath);
     const err = new Error('Server storage quota reached');
     err.statusCode = 507;
     throw err;
@@ -599,28 +685,58 @@ async function registerUploadedFile({
 }
 
 function isPrivateOrReservedIp(ip) {
-  if (!net.isIP(ip)) return true;
-  if (ip === '127.0.0.1' || ip === '0.0.0.0' || ip === '::1' || ip === '::') return true;
-  const lower = ip.toLowerCase();
+  if (typeof ip !== 'string' || !net.isIP(ip)) return true;
+  const lower = ip.toLowerCase().trim();
+  if (lower === '127.0.0.1' || lower === '0.0.0.0' || lower === '::1' || lower === '::') return true;
+
   if (lower.startsWith('::ffff:')) {
-    return isPrivateOrReservedIp(lower.slice(7));
+    const tail = lower.slice(7);
+    if (net.isIPv4(tail)) {
+      return isPrivateOrReservedIp(tail);
+    }
+    const hexMatch = tail.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (hexMatch) {
+      const hi = parseInt(hexMatch[1], 16);
+      const lo = parseInt(hexMatch[2], 16);
+      const v4 = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+      return isPrivateOrReservedIp(v4);
+    }
+    return true;
   }
-  if (net.isIPv4(ip)) {
-    const parts = ip.split('.').map(Number);
-    if (parts[0] === 10 || parts[0] === 127 || parts[0] === 0) return true;
+
+  if (net.isIPv4(lower)) {
+    const parts = lower.split('.').map(Number);
+    if (parts[0] === 0 || parts[0] === 10 || parts[0] === 127) return true;
+    if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true;
     if (parts[0] === 169 && parts[1] === 254) return true;
     if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+    if (parts[0] === 192 && parts[1] === 0 && (parts[2] === 0 || parts[2] === 2)) return true;
     if (parts[0] === 192 && parts[1] === 168) return true;
+    if (parts[0] === 198 && (parts[1] === 18 || parts[1] === 19)) return true;
+    if (parts[0] === 198 && parts[1] === 51 && parts[2] === 100) return true;
+    if (parts[0] === 203 && parts[1] === 0 && parts[2] === 113) return true;
     if (parts[0] >= 224) return true;
     return false;
   }
-  if (lower.startsWith('fc') || lower.startsWith('fd') || lower.startsWith('fe80')) {
+
+  if (
+    lower.startsWith('fc') ||
+    lower.startsWith('fd') ||
+    lower.startsWith('fe8') ||
+    lower.startsWith('fe9') ||
+    lower.startsWith('fea') ||
+    lower.startsWith('feb') ||
+    lower.startsWith('ff') ||
+    lower.startsWith('2001:db8:') ||
+    lower.startsWith('64:ff9b:') ||
+    lower.startsWith('100::')
+  ) {
     return true;
   }
   return false;
 }
 
-async function fetchRemoteUrlToTempFile(rawUrl, allowLocalhost = false) {
+async function fetchRemoteUrlToTempFile(rawUrl) {
   let parsed;
   try {
     parsed = new URL(String(rawUrl).trim());
@@ -634,22 +750,48 @@ async function fetchRemoteUrlToTempFile(rawUrl, allowLocalhost = false) {
     err.statusCode = 412;
     throw err;
   }
-
-  if (!allowLocalhost) {
-    const addresses = await dns.promises.lookup(parsed.hostname, { all: true });
-    if (!addresses.length || addresses.some((a) => isPrivateOrReservedIp(a.address))) {
-      const err = new Error('Remote URL points to a restricted or private network address');
-      err.statusCode = 412;
-      throw err;
-    }
+  if (parsed.username || parsed.password) {
+    const err = new Error('URLs with embedded credentials are not allowed');
+    err.statusCode = 412;
+    throw err;
   }
 
+  let addresses;
+  try {
+    addresses = await dns.promises.lookup(parsed.hostname, { all: true });
+  } catch {
+    const err = new Error('Could not resolve remote hostname');
+    err.statusCode = 412;
+    throw err;
+  }
+  if (!addresses.length || addresses.some((a) => isPrivateOrReservedIp(a.address))) {
+    const err = new Error('Remote URL points to a restricted or private network address');
+    err.statusCode = 412;
+    throw err;
+  }
+
+  const safeAddress = addresses[0];
   const tempFilePath = path.join(
     UPLOADS_DIR,
     `${Date.now()}-${crypto.randomBytes(8).toString('hex')}.bin`
   );
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finishReject = (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hardTimer);
+      safeUnlink(tempFilePath);
+      reject(err);
+    };
+    const finishResolve = (val) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hardTimer);
+      resolve(val);
+    };
+
     const client = parsed.protocol === 'https:' ? https : http;
     const req = client.get(
       parsed,
@@ -657,20 +799,34 @@ async function fetchRemoteUrlToTempFile(rawUrl, allowLocalhost = false) {
         headers: {
           'User-Agent': 'sera.drop-urlupload/1.0'
         },
-        timeout: 15000
+        timeout: 15000,
+        lookup: (hostname, opts, cb) => {
+          if (opts && opts.all) {
+            return cb(null, [{ address: safeAddress.address, family: safeAddress.family }]);
+          }
+          return cb(null, safeAddress.address, safeAddress.family);
+        }
       },
       (resp) => {
         if (resp.statusCode && resp.statusCode >= 300 && resp.statusCode < 400 && resp.headers.location) {
           resp.resume();
           const redirectErr = new Error('Remote URL redirects are not followed automatically; use direct media URL');
           redirectErr.statusCode = 412;
-          return reject(redirectErr);
+          return finishReject(redirectErr);
         }
         if (resp.statusCode !== 200) {
           resp.resume();
           const statusErr = new Error(`Remote server returned HTTP ${resp.statusCode}`);
           statusErr.statusCode = 412;
-          return reject(statusErr);
+          return finishReject(statusErr);
+        }
+
+        const declaredLen = parseInt(resp.headers['content-length'] || '0', 10);
+        if (declaredLen > MAX_FILE_SIZE_BYTES) {
+          resp.resume();
+          const maxErr = new Error('Remote file exceeds 500 MB limit');
+          maxErr.statusCode = 413;
+          return finishReject(maxErr);
         }
 
         const contentType = (resp.headers['content-type'] || 'application/octet-stream')
@@ -678,28 +834,39 @@ async function fetchRemoteUrlToTempFile(rawUrl, allowLocalhost = false) {
           .trim();
         const out = fs.createWriteStream(tempFilePath);
         let receivedBytes = 0;
-        let aborted = false;
 
         resp.on('data', (chunk) => {
           receivedBytes += chunk.length;
           if (receivedBytes > MAX_FILE_SIZE_BYTES) {
-            aborted = true;
             resp.destroy();
             out.destroy();
-            try {
-              fs.unlinkSync(tempFilePath);
-            } catch {}
             const maxErr = new Error('Remote file exceeds 500 MB limit');
             maxErr.statusCode = 413;
-            reject(maxErr);
+            finishReject(maxErr);
           }
+        });
+
+        resp.on('error', (err) => {
+          out.destroy();
+          err.statusCode = 412;
+          finishReject(err);
         });
 
         resp.pipe(out);
 
         out.on('finish', () => {
-          if (aborted) return;
-          const urlPathName = decodeURIComponent(path.basename(parsed.pathname || '') || 'remote-file');
+          if (settled) return;
+          if (receivedBytes <= 0) {
+            const emptyErr = new Error('Remote file is empty');
+            emptyErr.statusCode = 400;
+            return finishReject(emptyErr);
+          }
+          let urlPathName = 'remote-file';
+          try {
+            urlPathName = decodeURIComponent(path.basename(parsed.pathname || '') || 'remote-file');
+          } catch {
+            urlPathName = path.basename(parsed.pathname || '') || 'remote-file';
+          }
           let finalName = urlPathName;
           if (!path.extname(finalName)) {
             const mimeExtMap = {
@@ -715,7 +882,7 @@ async function fetchRemoteUrlToTempFile(rawUrl, allowLocalhost = false) {
             };
             finalName += mimeExtMap[contentType] || '.bin';
           }
-          resolve({
+          finishResolve({
             tempFilePath,
             originalName: finalName,
             mimeType: contentType,
@@ -724,23 +891,21 @@ async function fetchRemoteUrlToTempFile(rawUrl, allowLocalhost = false) {
         });
 
         out.on('error', (err) => {
-          try {
-            fs.unlinkSync(tempFilePath);
-          } catch {}
-          reject(err);
+          finishReject(err);
         });
       }
     );
+
+    const hardTimer = setTimeout(() => {
+      req.destroy(new Error('Remote URL transfer timed out'));
+    }, 30000);
 
     req.on('timeout', () => {
       req.destroy(new Error('Remote URL fetch timed out'));
     });
     req.on('error', (err) => {
-      try {
-        if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-      } catch {}
-      err.statusCode = 412;
-      reject(err);
+      err.statusCode = err.statusCode || 412;
+      finishReject(err);
     });
   });
 }
@@ -749,9 +914,13 @@ app.get('/api/status', (req, res) => {
   reapExpiredFiles();
   const db = loadDatabase();
   const albums = loadAlbums();
+  const tunnelDisabled = Boolean(
+    process.env.DISABLE_TUNNEL === 'true' || process.env.PUBLIC_URL || process.env.RENDER
+  );
   res.json({
     publicUrl: publicBaseUrl,
     cloudflareUrl,
+    tunnelEnabled: !tunnelDisabled,
     localUrl: `http://localhost:${PORT}`,
     storageUsedBytes: getTotalStorageUsed(db),
     storageQuotaBytes: MAX_TOTAL_STORAGE_BYTES,
@@ -764,7 +933,7 @@ app.get('/api/sharex.sxcu', (req, res) => {
   const baseUrl = resolveBaseUrl(req);
   const sxcu = {
     Version: '15.0.0',
-    Name: 'sera.drop (Catbox API Compatible)',
+    Name: 'sera.drop',
     DestinationType: 'ImageUploader, TextUploader, FileUploader',
     RequestMethod: 'POST',
     RequestURL: `${baseUrl}/user/api.php`,
@@ -813,10 +982,8 @@ app.post(
       payload.deleteToken = deleteToken;
       res.status(201).json(payload);
     } catch (err) {
-      if (req.file?.path && fs.existsSync(req.file.path)) {
-        try {
-          fs.unlinkSync(req.file.path);
-        } catch {}
+      if (req.file?.path) {
+        safeUnlink(req.file.path);
       }
       console.error('Upload error:', err.message);
       res.status(err.statusCode || 500).json({ error: err.message || 'Failed to upload file' });
@@ -837,7 +1004,7 @@ app.post('/api/url-upload', uploadRateLimiter, requireCsrfHeader, preUploadGuard
       req.body?.requireSignedUrl === 'true' || req.body?.requireSignedUrl === true;
     const isLocal = isDirectLocalhost(req);
 
-    const fetched = await fetchRemoteUrlToTempFile(targetUrl, isLocal);
+    const fetched = await fetchRemoteUrlToTempFile(targetUrl);
     const { record, deleteToken } = await registerUploadedFile({
       tempFilePath: fetched.tempFilePath,
       rawOriginalName: fetched.originalName,
@@ -863,7 +1030,7 @@ const catboxUploadMiddleware = multer({
   limits: { fileSize: MAX_FILE_SIZE_BYTES, files: 1 }
 }).single('fileToUpload');
 
-app.post('/user/api.php', uploadRateLimiter, (req, res) => {
+app.post('/user/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
   catboxUploadMiddleware(req, res, async (multerErr) => {
     if (multerErr) {
       return res.status(413).type('text/plain').send(multerErr.message);
@@ -873,6 +1040,10 @@ app.post('/user/api.php', uploadRateLimiter, (req, res) => {
       const userhash = String(req.body?.userhash || '').trim() || null;
       const baseUrl = resolveBaseUrl(req);
       const isLocal = isDirectLocalhost(req);
+
+      if (reqtype !== 'fileupload' && req.file?.path) {
+        safeUnlink(req.file.path);
+      }
 
       if (reqtype === 'fileupload') {
         if (!req.file) {
@@ -899,7 +1070,7 @@ app.post('/user/api.php', uploadRateLimiter, (req, res) => {
         if (!targetUrl) {
           return res.status(412).type('text/plain').send('No url provided.');
         }
-        const fetched = await fetchRemoteUrlToTempFile(targetUrl, isLocal);
+        const fetched = await fetchRemoteUrlToTempFile(targetUrl);
         const { record } = await registerUploadedFile({
           tempFilePath: fetched.tempFilePath,
           rawOriginalName: fetched.originalName,
@@ -930,18 +1101,13 @@ app.post('/user/api.php', uploadRateLimiter, (req, res) => {
         for (const f of filesList) {
           const code = path.basename(f).split('.')[0];
           const rec = getRecordByCode(db, code);
-          if (!rec || (!isLocal && rec.userhash !== expectedHash)) {
+          if (!rec || (!isLocal && (!rec.userhash || !expectedHash || !safeTimingEqualStrings(rec.userhash, expectedHash)))) {
             return res.status(400).type('text/plain').send(`File ${f} doesn't exist or unauthorized.`);
           }
           const storedName = rec.storedName;
           delete db[code];
           if (!isStoredFileReferenced(db, storedName, code)) {
-            const fp = path.join(UPLOADS_DIR, path.basename(storedName));
-            if (fs.existsSync(fp)) {
-              try {
-                fs.unlinkSync(fp);
-              } catch {}
-            }
+            safeUnlink(path.join(UPLOADS_DIR, path.basename(storedName)));
           }
         }
         saveDatabase(db);
@@ -981,7 +1147,7 @@ app.post('/user/api.php', uploadRateLimiter, (req, res) => {
         if (!album.userhash && !isLocal) {
           return res.status(403).type('text/plain').send('Anonymous albums cannot be edited or deleted.');
         }
-        if (!isLocal && (!userhash || hashToken(userhash) !== album.userhash)) {
+        if (!isLocal && (!userhash || !safeTimingEqualStrings(hashToken(userhash), album.userhash))) {
           return res.status(403).type('text/plain').send('Unauthorized userhash for this album.');
         }
 
@@ -1013,12 +1179,15 @@ app.post('/user/api.php', uploadRateLimiter, (req, res) => {
 
       return res.status(400).type('text/plain').send(`Unsupported reqtype: ${reqtype}`);
     } catch (err) {
+      if (req.file?.path) {
+        safeUnlink(req.file.path);
+      }
       return res.status(err.statusCode || 500).type('text/plain').send(err.message || 'API error');
     }
   });
 });
 
-app.post('/resources/internals/api.php', uploadRateLimiter, (req, res) => {
+app.post('/resources/internals/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
   catboxUploadMiddleware(req, res, async (multerErr) => {
     if (multerErr) {
       return res.status(413).type('text/plain').send(multerErr.message);
@@ -1026,10 +1195,12 @@ app.post('/resources/internals/api.php', uploadRateLimiter, (req, res) => {
     try {
       const reqtype = String(req.body?.reqtype || '').trim();
       if (reqtype !== 'fileupload' || !req.file) {
+        if (req.file?.path) safeUnlink(req.file.path);
         return res.status(400).type('text/plain').send('Invalid Litterbox upload request.');
       }
       const timeKey = String(req.body?.time || '1h').trim();
       if (!TTL_PRESETS_MS[timeKey]) {
+        safeUnlink(req.file.path);
         return res.status(400).type('text/plain').send('Invalid time parameter (1h, 12h, 24h, 72h).');
       }
       const fileNameLength = parseInt(req.body?.fileNameLength || '6', 10) === 16 ? 16 : 6;
@@ -1049,6 +1220,7 @@ app.post('/resources/internals/api.php', uploadRateLimiter, (req, res) => {
       const baseUrl = resolveBaseUrl(req);
       return res.status(200).type('text/plain').send(`${baseUrl}/files/${record.code}${ext}`);
     } catch (err) {
+      if (req.file?.path) safeUnlink(req.file.path);
       return res.status(err.statusCode || 500).type('text/plain').send(err.message || 'Litterbox error');
     }
   });
@@ -1088,7 +1260,7 @@ app.post('/api/albums', uploadRateLimiter, requireCsrfHeader, async (req, res) =
     const qrCodeDataUrl = await QRCode.toDataURL(albumUrl, {
       width: 280,
       margin: 2,
-      color: { dark: '#0f172a', light: '#ffffff' }
+      color: { dark: '#000000', light: '#ffffff' }
     });
 
     res.status(201).json({
@@ -1100,7 +1272,7 @@ app.post('/api/albums', uploadRateLimiter, requireCsrfHeader, async (req, res) =
       qrCodeDataUrl,
       deleteToken
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to create album' });
   }
 });
@@ -1122,7 +1294,7 @@ app.get('/api/albums/:short', lookupRateLimiter, async (req, res) => {
     const qrCodeDataUrl = await QRCode.toDataURL(albumUrl, {
       width: 280,
       margin: 2,
-      color: { dark: '#0f172a', light: '#ffffff' }
+      color: { dark: '#000000', light: '#ffffff' }
     });
 
     res.json({
@@ -1134,7 +1306,7 @@ app.get('/api/albums/:short', lookupRateLimiter, async (req, res) => {
       qrCodeDataUrl,
       files: filesPayload
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to load album' });
   }
 });
@@ -1195,12 +1367,12 @@ app.delete('/api/files/:code', lookupRateLimiter, requireCsrfHeader, (req, res) 
       return res.status(404).json({ error: 'File not found' });
     }
 
-    const providedToken = req.headers['x-delete-token'] || '';
+    const providedToken = String(req.headers['x-delete-token'] || '');
     const isAuthorized =
       isDirectLocalhost(req) ||
       (record.deleteTokenHash &&
         providedToken &&
-        hashToken(providedToken) === record.deleteTokenHash);
+        safeTimingEqualStrings(hashToken(providedToken), record.deleteTokenHash));
 
     if (!isAuthorized) {
       return res.status(403).json({ error: 'Unauthorized to delete this file' });
@@ -1211,10 +1383,7 @@ app.delete('/api/files/:code', lookupRateLimiter, requireCsrfHeader, (req, res) 
     saveDatabase(db);
 
     if (!isStoredFileReferenced(db, storedName, record.code)) {
-      const filePath = path.join(UPLOADS_DIR, path.basename(storedName));
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      }
+      safeUnlink(path.join(UPLOADS_DIR, path.basename(storedName)));
     }
 
     res.json({ success: true });
@@ -1224,7 +1393,33 @@ app.delete('/api/files/:code', lookupRateLimiter, requireCsrfHeader, (req, res) 
   }
 });
 
-app.head(['/raw/:code', '/files/:codeWithExt', '/f/:code'], (req, res, next) => {
+function resolveRawMediaDelivery(record) {
+  const ext = getSafeExtension(record.originalName);
+  const lowerMime = (record.mimeType || '').toLowerCase().trim();
+  const category = detectPreviewCategory(lowerMime, record.originalName);
+
+  if (category === 'text' || XSS_SENSITIVE_EXTENSIONS.has(ext)) {
+    return {
+      contentType: 'text/plain; charset=utf-8',
+      disposition: 'inline',
+      isPdf: false
+    };
+  }
+  if (SAFE_INLINE_MEDIA_MIMES.has(lowerMime)) {
+    return {
+      contentType: lowerMime,
+      disposition: 'inline',
+      isPdf: lowerMime === 'application/pdf' || ext === '.pdf'
+    };
+  }
+  return {
+    contentType: 'application/octet-stream',
+    disposition: 'attachment',
+    isPdf: false
+  };
+}
+
+app.head(['/raw/:code', '/files/:codeWithExt', '/f/:code'], lookupRateLimiter, (req, res, next) => {
   if (req.query.stat === '1') {
     return next();
   }
@@ -1234,10 +1429,17 @@ app.head(['/raw/:code', '/files/:codeWithExt', '/f/:code'], (req, res, next) => 
   if (!record) {
     return res.status(404).end();
   }
+  if (record.requireSignedUrl) {
+    const check = verifySecureLink(req.path, req.query.md5, req.query.expires);
+    if (!check.ok) {
+      return res.status(403).end();
+    }
+  }
+  const delivery = resolveRawMediaDelivery(record);
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Content-Type', record.mimeType || 'application/octet-stream');
-  res.setHeader('Content-Length', '0');
+  res.setHeader('Content-Type', delivery.contentType);
+  res.setHeader('Content-Length', String(record.size || 0));
   return res.status(200).end();
 });
 
@@ -1261,27 +1463,22 @@ function serveRawMedia(req, res, rawCodeParam) {
       return res.status(404).send('File missing from disk');
     }
 
-    res.setHeader(
-      'Content-Security-Policy',
-      "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'"
-    );
+    const delivery = resolveRawMediaDelivery(record);
+    const cspValue = delivery.isPdf
+      ? "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'"
+      : "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'";
+
+    res.setHeader('Content-Security-Policy', cspValue);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD');
-
-    const ext = getSafeExtension(record.originalName);
-    const category = detectPreviewCategory(record.mimeType, record.originalName);
-    if (category === 'text' || XSS_SENSITIVE_EXTENSIONS.has(ext)) {
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    } else {
-      res.setHeader('Content-Type', record.mimeType || 'application/octet-stream');
-    }
+    res.setHeader('Content-Type', delivery.contentType);
     res.setHeader(
       'Content-Disposition',
-      `inline; filename="${encodeURIComponent(record.originalName)}"`
+      buildContentDisposition(delivery.disposition, record.originalName)
     );
     res.sendFile(filePath);
-  } catch (err) {
+  } catch {
     res.status(500).send('Error serving file');
   }
 }
@@ -1322,7 +1519,7 @@ app.get('/d/:code', lookupRateLimiter, (req, res) => {
     saveDatabase(db);
 
     res.download(filePath, record.originalName);
-  } catch (err) {
+  } catch {
     res.status(500).send('Error downloading file');
   }
 });
@@ -1369,7 +1566,7 @@ async function startPublicTunnel() {
 if (require.main === module) {
   try {
     fs.writeFileSync(PID_FILE, String(process.pid), 'utf8');
-  } catch (err) {}
+  } catch {}
   app.listen(PORT, () => {
     console.log(`sera.drop local server running at http://localhost:${PORT}`);
     startPublicTunnel();

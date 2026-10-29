@@ -10,3 +10,5 @@ services:
         value: https://sera-drop.onrender.com
       - key: DISABLE_TUNNEL
         value: "true"
+      - key: SERA_DROP_SECRET
+        generateValue: true
