@@ -213,7 +213,7 @@ describe('sera-drop Security & Legal Compliance Suite', () => {
         category: 'copyright',
         explanation: 'Unauthorized distribution of copyrighted literary work.',
         notifierName: 'Jane Doe',
-        notifierEmail: 'jane@example.com',
+        notifierEmail: 'notifier@sera-compliance.test',
         goodFaithConfirmed: false
       })
     });
@@ -226,8 +226,8 @@ describe('sera-drop Security & Legal Compliance Suite', () => {
         targetCode: uploaded.code,
         category: 'copyright',
         explanation: 'Unauthorized distribution of copyrighted literary work.',
-        notifierName: 'Jane Doe',
-        notifierEmail: 'jane@example.com',
+        notifierName: 'Rights Holder Legal',
+        notifierEmail: 'notifier@sera-compliance.test',
         goodFaithConfirmed: true
       })
     });

@@ -1082,11 +1082,15 @@ function escapeHtml(value) {
 }
 
 function getOperatorConfig() {
+  const name = String(process.env.OPERATOR_NAME || '').trim();
+  const address = String(process.env.OPERATOR_ADDRESS || '').trim();
+  const email = String(process.env.OPERATOR_EMAIL || '').trim();
+  const phone = String(process.env.OPERATOR_PHONE || '').trim();
   return {
-    name: String(process.env.OPERATOR_NAME || 'SERA Drop Operator').trim(),
-    address: String(process.env.OPERATOR_ADDRESS || 'Musterstraße 1, 10115 Berlin, Germany').trim(),
-    email: String(process.env.OPERATOR_EMAIL || 'legal@sera-drop.example').trim(),
-    phone: String(process.env.OPERATOR_PHONE || '+49 30 0000000').trim()
+    name: name || null,
+    address: address || null,
+    email: email || null,
+    phone: phone || null
   };
 }
 
@@ -1121,30 +1125,43 @@ function renderLegalLayout(title, bodyHtml) {
 
 app.get('/impressum', (req, res) => {
   const op = getOperatorConfig();
+  const addressHtml = op.address
+    ? escapeHtml(op.address)
+    : '<span style="color:#888;">Not configured. Specify OPERATOR_ADDRESS in environment variables to satisfy statutory service provider identification requirements (DDG § 5).</span>';
+  const nameHtml = op.name
+    ? escapeHtml(op.name)
+    : 'sera.drop Operator';
+  const emailHtml = op.email
+    ? `<a href="mailto:${escapeHtml(op.email)}">${escapeHtml(op.email)}</a>`
+    : '<span style="color:#888;">Not configured. Specify OPERATOR_EMAIL in environment variables.</span>';
+  const phoneHtml = op.phone
+    ? escapeHtml(op.phone)
+    : 'Available upon request via email';
+
   const html = renderLegalLayout(
     'Impressum & Legal Notice (DDG § 5)',
     `<h1>Impressum (Legal Notice pursuant to § 5 DDG)</h1>
     <section style="margin-top:1.25rem;">
       <h2>Service Provider &amp; Operator (Digitale-Dienste-Gesetz § 5)</h2>
       <p>
-        <strong>${escapeHtml(op.name)}</strong><br />
-        ${escapeHtml(op.address)}
+        <strong>${nameHtml}</strong><br />
+        ${addressHtml}
       </p>
       <p>
-        <strong>Electronic Contact:</strong> <a href="mailto:${escapeHtml(op.email)}">${escapeHtml(op.email)}</a><br />
-        <strong>Telephone:</strong> ${escapeHtml(op.phone)}
+        <strong>Electronic Contact:</strong> ${emailHtml}<br />
+        <strong>Telephone:</strong> ${phoneHtml}
       </p>
     </section>
     <section style="margin-top:1.25rem;">
       <h2>EU Digital Services Act (DSA) Single Point of Contact (Art. 11 &amp; Art. 12 DSA)</h2>
       <p>
-        For member state authorities, the European Commission, the European Board for Digital Services, and service recipients, our designated point of contact is <a href="mailto:${escapeHtml(op.email)}">${escapeHtml(op.email)}</a>. Communications are accepted in German and English.
+        For member state authorities, the European Commission, the European Board for Digital Services, and service recipients, our designated point of contact is ${emailHtml}. Communications are accepted in German and English.
       </p>
     </section>
     <section style="margin-top:1.25rem;">
       <h2>Notice-and-Action Mechanism (Art. 16 DSA)</h2>
       <p>
-        To report suspected illegal content, copyright infringement, or malware hosted on sera.drop, submit a structured notice via the API endpoint <code>POST /api/report</code> or contact <a href="mailto:${escapeHtml(op.email)}">${escapeHtml(op.email)}</a>.
+        To report suspected illegal content, copyright infringement, or malware hosted on sera.drop, submit a structured notice via the API endpoint <code>POST /api/report</code> or contact ${emailHtml}.
       </p>
     </section>
     <section style="margin-top:1.25rem;">
@@ -1160,15 +1177,25 @@ app.get('/impressum', (req, res) => {
 
 app.get('/privacy', (req, res) => {
   const op = getOperatorConfig();
+  const addressHtml = op.address
+    ? escapeHtml(op.address)
+    : '<span style="color:#888;">Not configured. Specify OPERATOR_ADDRESS in environment variables.</span>';
+  const nameHtml = op.name
+    ? escapeHtml(op.name)
+    : 'sera.drop Operator';
+  const emailHtml = op.email
+    ? `<a href="mailto:${escapeHtml(op.email)}">${escapeHtml(op.email)}</a>`
+    : '<span style="color:#888;">Not configured. Specify OPERATOR_EMAIL in environment variables.</span>';
+
   const html = renderLegalLayout(
     'Privacy Policy (GDPR Art. 13)',
     `<h1>Privacy Policy (Information pursuant to Art. 13 GDPR)</h1>
     <section style="margin-top:1.25rem;">
       <h2>1. Data Controller Identity &amp; Contact</h2>
       <p>
-        <strong>${escapeHtml(op.name)}</strong><br />
-        ${escapeHtml(op.address)}<br />
-        Email: <a href="mailto:${escapeHtml(op.email)}">${escapeHtml(op.email)}</a>
+        <strong>${nameHtml}</strong><br />
+        ${addressHtml}<br />
+        Email: ${emailHtml}
       </p>
     </section>
     <section style="margin-top:1.25rem;">

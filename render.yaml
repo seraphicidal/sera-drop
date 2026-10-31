@@ -27,8 +27,8 @@ services:
       - key: ADMIN_TOKEN
         generateValue: true
       - key: OPERATOR_NAME
-        value: SERA Drop Operator
+        sync: false
       - key: OPERATOR_ADDRESS
-        value: Musterstraße 1, 10115 Berlin, Germany
+        sync: false
       - key: OPERATOR_EMAIL
-        value: legal@sera-drop.example
+        sync: false
