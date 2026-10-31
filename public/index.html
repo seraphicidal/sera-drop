@@ -4,27 +4,30 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>sera.drop</title>
-  <link rel="icon" type="image/png" href="/icon.png" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <link rel="icon" type="image/webp" href="/icon.webp" />
   <link rel="shortcut icon" href="/favicon.ico" />
-  <link rel="apple-touch-icon" href="/icon.png" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="apple-touch-icon" href="/icon.webp" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="container">
     <header class="navbar">
       <a href="/" class="brand">
-        <img src="/icon.png" alt="sera.drop" class="brand-icon" />
+        <img src="/icon.webp" alt="sera.drop" class="brand-icon" />
         <span>sera<span class="brand-dot">.</span>drop</span>
       </a>
       <div class="nav-meta">
-        <a id="publicUrlBadge" href="#" target="_blank" rel="noopener noreferrer" class="nav-badge nav-badge-active" style="display: none;"></a>
+        <a id="publicUrlBadge" href="#" target="_blank" rel="noopener noreferrer" class="nav-badge nav-badge-active hidden-el"></a>
         <span id="storageBadge" class="nav-badge"><span>0 B / 5 GB</span><span>Max 500 MB/file</span></span>
         <a href="/api/sharex.sxcu" class="nav-badge nav-badge-interactive">ShareX</a>
       </div>
     </header>
+
+    <div id="inlineError" class="inline-error-banner" role="alert">
+      <span id="inlineErrorText"></span>
+      <button type="button" id="inlineErrorDismiss" class="btn btn-secondary btn-sm" aria-label="Dismiss error">Dismiss</button>
+    </div>
 
     <main>
       <div class="card">
@@ -60,7 +63,7 @@
         <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload file dropzone">
           <input type="file" id="fileInput" multiple hidden />
           <div class="dropzone-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
               <polyline points="17 8 12 3 7 8"/>
               <line x1="12" y1="3" x2="12" y2="15"/>
@@ -76,6 +79,7 @@
             type="url"
             id="remoteUrlInput"
             class="control-input"
+            aria-label="Remote file URL"
             placeholder="https://example.com/file.png"
           />
           <button type="button" id="remoteUrlBtn" class="btn btn-secondary">Fetch</button>
@@ -90,40 +94,52 @@
             <div id="progressFill" class="progress-fill"></div>
           </div>
         </div>
+
+        <section id="uploadQueueDrawer" class="upload-queue-drawer" aria-label="Upload queue">
+          <div class="upload-queue-header">
+            <div class="upload-queue-title">
+              <span>Upload Queue</span>
+              <span id="uploadQueueSummary" class="upload-queue-summary">0 / 0 completed</span>
+            </div>
+            <button type="button" id="clearCompletedQueueBtn" class="btn btn-secondary btn-sm">Clear finished</button>
+          </div>
+          <div id="uploadQueueList" class="upload-queue-list"></div>
+        </section>
       </div>
 
       <div id="resultCard" class="card result-card">
-        <div style="min-width: 0;">
+        <div class="result-main-col">
           <div class="result-badges">
             <span class="badge-success">Ready</span>
-            <span id="resultDedupeBadge" class="meta-pill pill-mono" style="display: none;">Deduplicated</span>
-            <span id="resultTtlBadge" class="meta-pill pill-crimson" style="display: none;">Ephemeral</span>
-            <span id="resultSignedBadge" class="meta-pill pill-crimson" style="display: none;">Signed</span>
+            <span id="resultDedupeBadge" class="meta-pill pill-mono hidden-el">Deduplicated</span>
+            <span id="resultTtlBadge" class="meta-pill pill-crimson hidden-el">Ephemeral</span>
+            <span id="resultSignedBadge" class="meta-pill pill-crimson hidden-el">Signed</span>
           </div>
 
-          <h2 id="resultFileName" style="font-size: 1.15rem; font-weight: 600; word-break: break-all;">filename.ext</h2>
-          <div id="resultFileMeta" class="file-sub" style="margin-top: 4px;"></div>
+          <h2 id="resultFileName" class="result-file-heading">filename.ext</h2>
+          <div id="resultFileMeta" class="file-sub"></div>
 
           <div class="short-link-box">
             <span class="link-prefix-tag">Share</span>
-            <input type="text" id="resultShortUrl" class="short-link-input" readonly />
+            <input type="text" id="resultShortUrl" class="short-link-input" readonly aria-label="Share link" />
             <button type="button" id="copyResultBtn" class="btn btn-primary btn-sm">Copy</button>
           </div>
 
-          <div class="short-link-box" style="margin-top: 6px;">
+          <div class="short-link-box">
             <span class="link-prefix-tag">Direct</span>
-            <input type="text" id="resultDirectUrl" class="short-link-input" readonly />
+            <input type="text" id="resultDirectUrl" class="short-link-input" readonly aria-label="Direct link" />
             <button type="button" id="copyDirectBtn" class="btn btn-secondary btn-sm">Copy</button>
           </div>
 
-          <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px;">
+          <div class="result-actions-row">
             <a id="openSharePageBtn" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm">Open</a>
             <a id="downloadQrBtn" href="#" download="sera-drop-qr.png" class="btn btn-secondary btn-sm">QR</a>
+            <button type="button" id="reportResultBtn" class="btn btn-danger btn-sm">Report Abuse</button>
           </div>
         </div>
 
         <div class="qr-box">
-          <img id="resultQrImage" src="" alt="QR Code" />
+          <img id="resultQrImage" src="/icon.svg" alt="QR Code" />
         </div>
       </div>
 
@@ -136,22 +152,22 @@
           <input
             type="text"
             id="albumTitleInput"
-            class="control-input"
-            style="width: 190px; padding: 5px 10px; font-size: 0.8rem;"
+            class="control-input album-title-input"
+            aria-label="Album title"
             placeholder="Album title"
           />
           <button type="button" id="createAlbumBtn" class="btn btn-secondary btn-sm">Create Album</button>
         </div>
       </div>
 
-      <div id="albumResultBanner" class="card album-banner" style="display: none;">
+      <div id="albumResultBanner" class="card album-banner hidden-el">
         <div class="album-banner-inner">
           <div class="album-banner-info">
             <span class="meta-pill pill-crimson">Album</span>
-            <strong id="albumResultTitle" style="font-size: 0.9rem; font-weight: 600;">Album</strong>
+            <strong id="albumResultTitle" class="album-banner-title">Album</strong>
             <a id="albumResultLink" href="#" target="_blank" rel="noopener noreferrer" class="album-banner-link"></a>
           </div>
-          <div style="display: flex; gap: 6px;">
+          <div class="album-banner-actions">
             <button type="button" id="copyAlbumBtn" class="btn btn-primary btn-sm">Copy</button>
             <a id="openAlbumBtn" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm">Open</a>
           </div>
@@ -160,527 +176,67 @@
 
       <div id="fileList" class="file-list"></div>
     </main>
+
+    <footer class="legal-footer">
+      <span>sera.drop — EU DSA Art. 16 Notice &amp; Action</span>
+      <div class="legal-footer-links">
+        <a href="/impressum">Impressum</a>
+        <a href="/privacy">Privacy Policy</a>
+        <button type="button" class="btn btn-danger btn-sm" data-open-report="true">Report Abuse</button>
+      </div>
+    </footer>
   </div>
 
-  <img src="/offscript.png" alt="" class="corner-mascot" aria-hidden="true" />
-  <div id="toast" class="toast">Copied</div>
+  <div id="reportModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="reportModalTitle" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h2 id="reportModalTitle">Report Illegal or Abusive Content (DSA Art. 16)</h2>
+        <button type="button" id="reportModalClose" class="btn btn-secondary btn-sm" aria-label="Close report dialog">Close</button>
+      </div>
+      <form id="reportForm" class="modal-form">
+        <div class="modal-field">
+          <label for="reportTargetUrl">Content URL</label>
+          <input type="text" id="reportTargetUrl" class="control-input" required />
+        </div>
+        <div class="modal-field">
+          <label for="reportCategory">Category</label>
+          <select id="reportCategory" class="control-select" required>
+            <option value="illegal_content">Illegal Content</option>
+            <option value="copyright">Copyright Infringement</option>
+            <option value="malware">Malware / Phishing</option>
+            <option value="csam">CSAM / Severe Harm</option>
+            <option value="other">Other Terms Violation</option>
+          </select>
+        </div>
+        <div class="modal-field">
+          <label for="reportExplanation">Detailed Explanation</label>
+          <textarea id="reportExplanation" class="control-input modal-textarea" required placeholder="Explain why this content is illegal or violates policy..."></textarea>
+        </div>
+        <div class="modal-field">
+          <label for="reportNotifierName">Your Name (optional for anonymous)</label>
+          <input type="text" id="reportNotifierName" class="control-input" placeholder="Jane Doe" />
+        </div>
+        <div class="modal-field">
+          <label for="reportNotifierEmail">Your Email (for confirmation)</label>
+          <input type="email" id="reportNotifierEmail" class="control-input" placeholder="you@example.com" />
+        </div>
+        <label class="checkbox-label">
+          <input type="checkbox" id="reportGoodFaith" required checked />
+          <span>I confirm in good faith that the information in this notice is accurate and complete.</span>
+        </label>
+        <div id="reportFormStatus" class="report-status" role="status" aria-live="polite"></div>
+        <div class="modal-actions">
+          <button type="button" id="reportModalCancel" class="btn btn-secondary btn-sm">Cancel</button>
+          <button type="submit" id="reportSubmitBtn" class="btn btn-primary btn-sm">Submit Report</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
-  <script>
-    const dropzone = document.getElementById('dropzone');
-    const fileInput = document.getElementById('fileInput');
-    const ttlSelect = document.getElementById('ttlSelect');
-    const codeLengthSelect = document.getElementById('codeLengthSelect');
-    const signedUrlToggle = document.getElementById('signedUrlToggle');
-    const remoteUrlInput = document.getElementById('remoteUrlInput');
-    const remoteUrlBtn = document.getElementById('remoteUrlBtn');
-    const storageBadge = document.getElementById('storageBadge');
+  <img src="/offscript.webp" alt="" class="corner-mascot" aria-hidden="true" />
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true">Copied</div>
 
-    const progressWrapper = document.getElementById('progressWrapper');
-    const progressFileName = document.getElementById('progressFileName');
-    const progressPercent = document.getElementById('progressPercent');
-    const progressFill = document.getElementById('progressFill');
-
-    const resultCard = document.getElementById('resultCard');
-    const resultFileName = document.getElementById('resultFileName');
-    const resultFileMeta = document.getElementById('resultFileMeta');
-    const resultShortUrl = document.getElementById('resultShortUrl');
-    const resultDirectUrl = document.getElementById('resultDirectUrl');
-    const resultDedupeBadge = document.getElementById('resultDedupeBadge');
-    const resultTtlBadge = document.getElementById('resultTtlBadge');
-    const resultSignedBadge = document.getElementById('resultSignedBadge');
-    const copyResultBtn = document.getElementById('copyResultBtn');
-    const copyDirectBtn = document.getElementById('copyDirectBtn');
-    const openSharePageBtn = document.getElementById('openSharePageBtn');
-    const downloadQrBtn = document.getElementById('downloadQrBtn');
-    const resultQrImage = document.getElementById('resultQrImage');
-
-    const fileList = document.getElementById('fileList');
-    const fileCountLabel = document.getElementById('fileCountLabel');
-    const albumTitleInput = document.getElementById('albumTitleInput');
-    const createAlbumBtn = document.getElementById('createAlbumBtn');
-    const albumResultBanner = document.getElementById('albumResultBanner');
-    const albumResultTitle = document.getElementById('albumResultTitle');
-    const albumResultLink = document.getElementById('albumResultLink');
-    const copyAlbumBtn = document.getElementById('copyAlbumBtn');
-    const openAlbumBtn = document.getElementById('openAlbumBtn');
-    const toast = document.getElementById('toast');
-
-    let currentLoadedFiles = [];
-    const selectedForAlbum = new Set();
-    let statusPollAttempts = 0;
-
-    let toastTimer = null;
-    function showToast(msg) {
-      toast.textContent = msg;
-      toast.classList.add('show');
-      clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
-    }
-
-    function formatBytes(bytes) {
-      if (!bytes || bytes === 0) return '0 B';
-      const k = 1024;
-      const sizes = ['B', 'KB', 'MB', 'GB'];
-      const i = Math.floor(Math.log(bytes) / Math.log(k));
-      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-    }
-
-    function formatDate(iso) {
-      const d = new Date(iso);
-      return d.toLocaleString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-    }
-
-    function formatRemainingTtl(expiresAt) {
-      if (!expiresAt) return null;
-      const diffMs = new Date(expiresAt).getTime() - Date.now();
-      if (diffMs <= 0) return 'Expired';
-      const mins = Math.ceil(diffMs / 60000);
-      if (mins < 60) return `${mins}m`;
-      const hrs = (diffMs / 3600000).toFixed(1);
-      return `${hrs}h`;
-    }
-
-    function getExtBadge(filename) {
-      const parts = (filename || '').split('.');
-      if (parts.length > 1) {
-        return parts.pop().slice(0, 4).toUpperCase();
-      }
-      return 'FILE';
-    }
-
-    function escapeHtml(str) {
-      return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-    }
-
-    const OWNED_STORAGE_KEY = 'sera_drop_owned_files';
-
-    function getOwnedFilesMap() {
-      try {
-        return JSON.parse(localStorage.getItem(OWNED_STORAGE_KEY) || '{}');
-      } catch {
-        return {};
-      }
-    }
-
-    function saveOwnedFileToken(code, deleteToken) {
-      if (!code || !deleteToken) return;
-      const map = getOwnedFilesMap();
-      map[code] = deleteToken;
-      localStorage.setItem(OWNED_STORAGE_KEY, JSON.stringify(map));
-    }
-
-    function removeOwnedFileToken(code) {
-      const map = getOwnedFilesMap();
-      delete map[code];
-      localStorage.setItem(OWNED_STORAGE_KEY, JSON.stringify(map));
-    }
-
-    async function copyText(text, label = 'Link') {
-      try {
-        await navigator.clipboard.writeText(text);
-        showToast(`${label} copied`);
-      } catch {
-        const input = document.createElement('input');
-        input.value = text;
-        document.body.appendChild(input);
-        input.select();
-        document.execCommand('copy');
-        document.body.removeChild(input);
-        showToast(`${label} copied`);
-      }
-    }
-
-    function bindCatboxClickBehavior(el, getUrl, label) {
-      el.addEventListener('click', () => copyText(getUrl(), label));
-      el.addEventListener('auxclick', (e) => {
-        if (e.button === 1) {
-          e.preventDefault();
-          window.open(getUrl(), '_blank', 'noopener,noreferrer');
-        }
-      });
-    }
-
-    bindCatboxClickBehavior(resultShortUrl, () => resultShortUrl.value, 'Share link');
-    bindCatboxClickBehavior(resultDirectUrl, () => resultDirectUrl.value, 'Direct link');
-
-    dropzone.addEventListener('click', (e) => {
-      if (e.target !== fileInput) {
-        fileInput.click();
-      }
-    });
-
-    dropzone.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        fileInput.click();
-      }
-    });
-
-    fileInput.addEventListener('change', async () => {
-      const files = Array.from(fileInput.files || []);
-      fileInput.value = '';
-      for (const file of files) {
-        await uploadFile(file);
-      }
-    });
-
-    ['dragenter', 'dragover'].forEach((evt) => {
-      dropzone.addEventListener(evt, (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        dropzone.classList.add('drag-over');
-      });
-    });
-
-    ['dragleave', 'drop'].forEach((evt) => {
-      dropzone.addEventListener(evt, (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        dropzone.classList.remove('drag-over');
-      });
-    });
-
-    dropzone.addEventListener('drop', async (e) => {
-      const files = Array.from(e.dataTransfer?.files || []);
-      for (const file of files) {
-        await uploadFile(file);
-      }
-    });
-
-    window.addEventListener('paste', async (e) => {
-      if (document.activeElement === remoteUrlInput || document.activeElement === albumTitleInput) {
-        return;
-      }
-      const items = Array.from(e.clipboardData?.files || []);
-      for (const file of items) {
-        await uploadFile(file);
-      }
-    });
-
-    function uploadFile(file) {
-      return new Promise((resolve) => {
-        const formData = new FormData();
-        formData.append('ttl', ttlSelect.value);
-        formData.append('codeLength', codeLengthSelect.value);
-        formData.append('requireSignedUrl', String(signedUrlToggle.checked));
-        formData.append('file', file);
-
-        progressFileName.textContent = file.name;
-        progressPercent.textContent = '0%';
-        progressFill.style.width = '0%';
-        progressWrapper.classList.add('active');
-
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', '/api/upload', true);
-        xhr.setRequestHeader('X-Requested-With', 'sera.drop');
-
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            const pct = Math.round((e.loaded / e.total) * 100);
-            progressPercent.textContent = `${pct}%`;
-            progressFill.style.width = `${pct}%`;
-          }
-        };
-
-        xhr.onload = () => {
-          progressWrapper.classList.remove('active');
-          if (xhr.status >= 200 && xhr.status < 300) {
-            const data = JSON.parse(xhr.responseText);
-            if (data.deleteToken) {
-              saveOwnedFileToken(data.code, data.deleteToken);
-            }
-            displayResult(data);
-            loadFiles();
-            checkPublicStatus();
-            showToast(data.deduplicated ? 'Deduplicated' : 'Uploaded');
-          } else {
-            let errMsg = 'Upload failed';
-            try {
-              errMsg = JSON.parse(xhr.responseText).error || errMsg;
-            } catch {}
-            showToast(errMsg);
-          }
-          resolve();
-        };
-
-        xhr.onerror = () => {
-          progressWrapper.classList.remove('active');
-          showToast('Network error');
-          resolve();
-        };
-
-        xhr.send(formData);
-      });
-    }
-
-    async function uploadRemoteUrl() {
-      const url = remoteUrlInput.value.trim();
-      if (!url) {
-        showToast('Enter a valid URL');
-        return;
-      }
-      remoteUrlBtn.disabled = true;
-      remoteUrlBtn.textContent = '...';
-      try {
-        const res = await fetch('/api/url-upload', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Requested-With': 'sera.drop'
-          },
-          body: JSON.stringify({
-            url,
-            ttl: ttlSelect.value,
-            codeLength: codeLengthSelect.value,
-            requireSignedUrl: signedUrlToggle.checked
-          })
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          showToast(data.error || 'Fetch failed');
-          return;
-        }
-        remoteUrlInput.value = '';
-        if (data.deleteToken) {
-          saveOwnedFileToken(data.code, data.deleteToken);
-        }
-        displayResult(data);
-        loadFiles();
-        checkPublicStatus();
-        showToast('Uploaded');
-      } catch {
-        showToast('Network error');
-      } finally {
-        remoteUrlBtn.disabled = false;
-        remoteUrlBtn.textContent = 'Fetch';
-      }
-    }
-
-    remoteUrlBtn.addEventListener('click', uploadRemoteUrl);
-    remoteUrlInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        uploadRemoteUrl();
-      }
-    });
-
-    function displayResult(item) {
-      resultFileName.textContent = item.originalName;
-      const metaParts = [
-        `<span>${escapeHtml(formatBytes(item.size))}</span>`,
-        `<span>${escapeHtml(item.code)}</span>`
-      ];
-      if (item.sha256) {
-        metaParts.push(`<span>${escapeHtml(item.sha256.slice(0, 12))}</span>`);
-      }
-      resultFileMeta.innerHTML = metaParts.join('');
-      resultShortUrl.value = item.shortUrl;
-      resultDirectUrl.value = item.directUrl || item.rawUrl;
-      openSharePageBtn.href = `/s/${encodeURIComponent(item.code)}`;
-      resultQrImage.src = item.qrCodeDataUrl;
-      downloadQrBtn.href = item.qrCodeDataUrl;
-      downloadQrBtn.download = `qr-${item.code}.png`;
-
-      resultDedupeBadge.style.display = item.deduplicated ? 'inline-flex' : 'none';
-      if (item.expiresAt) {
-        resultTtlBadge.style.display = 'inline-flex';
-        resultTtlBadge.textContent = `${formatRemainingTtl(item.expiresAt)}`;
-      } else {
-        resultTtlBadge.style.display = 'none';
-      }
-      resultSignedBadge.style.display = item.requireSignedUrl ? 'inline-flex' : 'none';
-
-      resultCard.classList.add('active');
-    }
-
-    copyResultBtn.addEventListener('click', () => copyText(resultShortUrl.value, 'Share link'));
-    copyDirectBtn.addEventListener('click', () => copyText(resultDirectUrl.value, 'Direct link'));
-
-    async function createAlbum() {
-      const codesToInclude =
-        selectedForAlbum.size > 0
-          ? Array.from(selectedForAlbum)
-          : currentLoadedFiles.map((f) => f.code);
-
-      if (!codesToInclude.length) {
-        showToast('Select at least one file');
-        return;
-      }
-
-      const title = albumTitleInput.value.trim() || `Album (${codesToInclude.length})`;
-      createAlbumBtn.disabled = true;
-      try {
-        const res = await fetch('/api/albums', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Requested-With': 'sera.drop'
-          },
-          body: JSON.stringify({
-            title,
-            description: `${codesToInclude.length} files`,
-            files: codesToInclude
-          })
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          showToast(data.error || 'Failed to create album');
-          return;
-        }
-        albumTitleInput.value = '';
-        selectedForAlbum.clear();
-        albumResultTitle.textContent = `${data.title} (${data.files.length})`;
-        albumResultLink.textContent = data.albumUrl;
-        albumResultLink.href = `/c/${encodeURIComponent(data.short)}`;
-        openAlbumBtn.href = `/c/${encodeURIComponent(data.short)}`;
-        copyAlbumBtn.onclick = () => copyText(data.albumUrl, 'Album link');
-        albumResultBanner.style.display = 'block';
-        copyText(data.albumUrl, 'Album link');
-        loadFiles();
-      } catch {
-        showToast('Error creating album');
-      } finally {
-        createAlbumBtn.disabled = false;
-      }
-    }
-
-    createAlbumBtn.addEventListener('click', createAlbum);
-
-    async function deleteFile(code) {
-      const owned = getOwnedFilesMap();
-      const token = owned[code] || '';
-      const headers = { 'X-Requested-With': 'sera.drop' };
-      if (token) {
-        headers['X-Delete-Token'] = token;
-      }
-      const res = await fetch(`/api/files/${encodeURIComponent(code)}`, {
-        method: 'DELETE',
-        headers
-      });
-      if (res.ok) {
-        removeOwnedFileToken(code);
-        selectedForAlbum.delete(code);
-        showToast('Deleted');
-        loadFiles();
-        checkPublicStatus();
-      } else {
-        showToast('Unauthorized');
-      }
-    }
-
-    async function loadFiles() {
-      try {
-        const ownedCodes = Object.keys(getOwnedFilesMap());
-        const query = ownedCodes.length ? `?codes=${encodeURIComponent(ownedCodes.join(','))}` : '';
-        const res = await fetch(`/api/files${query}`);
-        const files = await res.json();
-        currentLoadedFiles = Array.isArray(files) ? files : [];
-        fileCountLabel.textContent = `${currentLoadedFiles.length}`;
-
-        if (currentLoadedFiles.length === 0) {
-          fileList.innerHTML = `<div class="card empty-state">No files</div>`;
-          return;
-        }
-
-        fileList.innerHTML = '';
-        const execExts = new Set(['EXE', 'BAT', 'PS1', 'CMD', 'VBS', 'MSI', 'SCR', 'COM', 'LNK']);
-        currentLoadedFiles.forEach((f) => {
-          const safeName = escapeHtml(f.originalName);
-          const rawBadge = getExtBadge(f.originalName);
-          const safeBadge = escapeHtml(rawBadge);
-          const safeCode = escapeHtml(f.code);
-          const isExec = execExts.has(rawBadge);
-          const warnTag = isExec ? `<span class="tag-warn">Executable</span>` : '';
-          const dedupeTag = f.deduplicated ? `<span class="tag-mono">Dedupe</span>` : '';
-          const ttlRemaining = formatRemainingTtl(f.expiresAt);
-          const ttlTag = ttlRemaining ? `<span class="tag-accent">${escapeHtml(ttlRemaining)}</span>` : '';
-          const signedTag = f.requireSignedUrl ? `<span class="tag-accent">Signed</span>` : '';
-          const checkedAttr = selectedForAlbum.has(f.code) ? 'checked' : '';
-
-          const row = document.createElement('div');
-          row.className = 'file-item';
-          row.innerHTML = `
-            <div class="file-meta">
-              <input type="checkbox" class="album-check" data-code="${safeCode}" ${checkedAttr} aria-label="Select for Album" />
-              <div class="file-type-badge">${safeBadge}</div>
-              <div class="file-info">
-                <div class="file-name" title="${safeName}">${safeName}</div>
-                <div class="file-sub">
-                  ${warnTag}
-                  ${dedupeTag}
-                  ${ttlTag}
-                  ${signedTag}
-                  <span>${escapeHtml(formatBytes(f.size))}</span>
-                  <span>${Number(f.downloads) || 0} dl</span>
-                  <span>${escapeHtml(formatDate(f.createdAt))}</span>
-                  <a href="/s/${safeCode}" class="file-code-link">/s/${safeCode}</a>
-                </div>
-              </div>
-            </div>
-            <div class="file-actions">
-              <button type="button" class="btn btn-secondary btn-sm copy-btn">Copy</button>
-              <button type="button" class="btn btn-secondary btn-sm copy-direct-btn">Direct</button>
-              <a href="/s/${safeCode}" class="btn btn-secondary btn-sm">Preview</a>
-              <button type="button" class="btn btn-danger btn-sm delete-btn">Delete</button>
-            </div>
-          `;
-
-          const checkEl = row.querySelector('.album-check');
-          checkEl.addEventListener('change', () => {
-            if (checkEl.checked) {
-              selectedForAlbum.add(f.code);
-            } else {
-              selectedForAlbum.delete(f.code);
-            }
-          });
-
-          bindCatboxClickBehavior(row.querySelector('.copy-btn'), () => f.shortUrl, 'Share link');
-          bindCatboxClickBehavior(
-            row.querySelector('.copy-direct-btn'),
-            () => f.directUrl || f.rawUrl,
-            'Direct link'
-          );
-          row.querySelector('.delete-btn').addEventListener('click', () => deleteFile(f.code));
-          fileList.appendChild(row);
-        });
-      } catch (err) {
-        console.error('Error loading files:', err);
-      }
-    }
-
-    async function checkPublicStatus() {
-      try {
-        const res = await fetch('/api/status');
-        const data = await res.json();
-        const badge = document.getElementById('publicUrlBadge');
-        if (typeof data.storageUsedBytes === 'number') {
-          storageBadge.innerHTML = `<span>${escapeHtml(formatBytes(data.storageUsedBytes))} / 5 GB</span><span>Max 500 MB/file</span>`;
-        }
-        const isLocalHost =
-          window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-        if (data.publicUrl && isLocalHost) {
-          badge.href = data.publicUrl;
-          badge.textContent = data.publicUrl.replace(/^https?:\/\//, '');
-          badge.style.display = 'inline-flex';
-        } else if (!data.publicUrl && data.tunnelEnabled && statusPollAttempts < 15) {
-          statusPollAttempts += 1;
-          setTimeout(checkPublicStatus, 2000);
-        }
-      } catch {}
-    }
-
-    loadFiles();
-    checkPublicStatus();
-  </script>
+  <script src="/qr.js" defer></script>
+  <script src="/app-index.js" defer></script>
 </body>
 </html>

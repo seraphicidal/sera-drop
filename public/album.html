@@ -4,181 +4,94 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>sera.drop</title>
-  <link rel="icon" type="image/png" href="/icon.png" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <link rel="icon" type="image/webp" href="/icon.webp" />
   <link rel="shortcut icon" href="/favicon.ico" />
-  <link rel="apple-touch-icon" href="/icon.png" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="apple-touch-icon" href="/icon.webp" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="container">
     <header class="navbar">
       <a href="/" class="brand">
-        <img src="/icon.png" alt="sera.drop" class="brand-icon" />
+        <img src="/icon.webp" alt="sera.drop" class="brand-icon" />
         <span>sera<span class="brand-dot">.</span>drop</span>
       </a>
-      <a href="/" class="btn btn-secondary btn-sm">Upload</a>
+      <div class="nav-meta">
+        <button type="button" class="btn btn-danger btn-sm" data-open-report="true">Report Abuse</button>
+        <a href="/" class="btn btn-secondary btn-sm">Upload</a>
+      </div>
     </header>
+
+    <div id="inlineError" class="inline-error-banner" role="alert">
+      <span id="inlineErrorText"></span>
+      <button type="button" id="inlineErrorDismiss" class="btn btn-secondary btn-sm" aria-label="Dismiss error">Dismiss</button>
+    </div>
 
     <main id="albumMain">
       <div class="card empty-state">Loading</div>
     </main>
+
+    <footer class="legal-footer">
+      <span>sera.drop — EU DSA Art. 16 Notice &amp; Action</span>
+      <div class="legal-footer-links">
+        <a href="/impressum">Impressum</a>
+        <a href="/privacy">Privacy Policy</a>
+        <button type="button" class="btn btn-danger btn-sm" data-open-report="true">Report Abuse</button>
+      </div>
+    </footer>
   </div>
 
-  <img src="/offscript.png" alt="" class="corner-mascot" aria-hidden="true" />
-  <div id="toast" class="toast">Copied</div>
+  <div id="reportModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="reportModalTitle" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h2 id="reportModalTitle">Report Illegal or Abusive Content (DSA Art. 16)</h2>
+        <button type="button" id="reportModalClose" class="btn btn-secondary btn-sm" aria-label="Close report dialog">Close</button>
+      </div>
+      <form id="reportForm" class="modal-form">
+        <div class="modal-field">
+          <label for="reportTargetUrl">Content URL</label>
+          <input type="text" id="reportTargetUrl" class="control-input" required />
+        </div>
+        <div class="modal-field">
+          <label for="reportCategory">Category</label>
+          <select id="reportCategory" class="control-select" required>
+            <option value="illegal_content">Illegal Content</option>
+            <option value="copyright">Copyright Infringement</option>
+            <option value="malware">Malware / Phishing</option>
+            <option value="csam">CSAM / Severe Harm</option>
+            <option value="other">Other Terms Violation</option>
+          </select>
+        </div>
+        <div class="modal-field">
+          <label for="reportExplanation">Detailed Explanation</label>
+          <textarea id="reportExplanation" class="control-input modal-textarea" required placeholder="Explain why this content is illegal or violates policy..."></textarea>
+        </div>
+        <div class="modal-field">
+          <label for="reportNotifierName">Your Name (optional for anonymous)</label>
+          <input type="text" id="reportNotifierName" class="control-input" placeholder="Jane Doe" />
+        </div>
+        <div class="modal-field">
+          <label for="reportNotifierEmail">Your Email (for confirmation)</label>
+          <input type="email" id="reportNotifierEmail" class="control-input" placeholder="you@example.com" />
+        </div>
+        <label class="checkbox-label">
+          <input type="checkbox" id="reportGoodFaith" required checked />
+          <span>I confirm in good faith that the information in this notice is accurate and complete.</span>
+        </label>
+        <div id="reportFormStatus" class="report-status" role="status" aria-live="polite"></div>
+        <div class="modal-actions">
+          <button type="button" id="reportModalCancel" class="btn btn-secondary btn-sm">Cancel</button>
+          <button type="submit" id="reportSubmitBtn" class="btn btn-primary btn-sm">Submit Report</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
-  <script>
-    const albumMain = document.getElementById('albumMain');
-    const toast = document.getElementById('toast');
-    let toastTimer = null;
+  <img src="/offscript.webp" alt="" class="corner-mascot" aria-hidden="true" />
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true">Copied</div>
 
-    function showToast(msg) {
-      toast.textContent = msg;
-      toast.classList.add('show');
-      clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
-    }
-
-    function formatBytes(bytes) {
-      if (!bytes || bytes === 0) return '0 B';
-      const k = 1024;
-      const sizes = ['B', 'KB', 'MB', 'GB'];
-      const i = Math.floor(Math.log(bytes) / Math.log(k));
-      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-    }
-
-    function escapeHtml(str) {
-      return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-    }
-
-    async function copyText(text, label = 'Link') {
-      try {
-        await navigator.clipboard.writeText(text);
-        showToast(`${label} copied`);
-      } catch {
-        const input = document.createElement('input');
-        input.value = text;
-        document.body.appendChild(input);
-        input.select();
-        document.execCommand('copy');
-        document.body.removeChild(input);
-        showToast(`${label} copied`);
-      }
-    }
-
-    async function loadAlbum() {
-      const parts = window.location.pathname.split('/').filter(Boolean);
-      const short = parts[parts.length - 1];
-
-      try {
-        const res = await fetch(`/api/albums/${encodeURIComponent(short)}`);
-        if (!res.ok) {
-          albumMain.innerHTML = `
-            <div class="card" style="text-align: center; padding: 56px 24px;">
-              <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 8px;">Not Found</h2>
-              <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 20px;">
-                /c/${escapeHtml(short)} does not exist.
-              </p>
-              <a href="/" class="btn btn-primary">Return</a>
-            </div>
-          `;
-          return;
-        }
-
-        const album = await res.json();
-        document.title = `${album.title} — sera.drop`;
-
-        const totalBytes = album.files.reduce((sum, f) => sum + (f.size || 0), 0);
-
-        const cardsHtml = album.files
-          .map((f) => {
-            const safeRawUrl = escapeHtml(f.rawUrl);
-            const safeDownloadUrl = escapeHtml(f.downloadUrl);
-            const safeDirectUrl = escapeHtml(f.directUrl || f.rawUrl);
-            const safeName = escapeHtml(f.originalName);
-            const safeCode = escapeHtml(f.code);
-            let thumbHtml = '';
-            if (f.previewCategory === 'image') {
-              thumbHtml = `<img src="${safeRawUrl}" alt="${safeName}" class="album-thumb-img" loading="lazy" />`;
-            } else if (f.previewCategory === 'video') {
-              thumbHtml = `<video src="${safeRawUrl}" preload="metadata" muted class="album-thumb-img"></video>`;
-            } else {
-              thumbHtml = `<div class="album-thumb-placeholder">${escapeHtml((f.originalName.split('.').pop() || 'FILE').toUpperCase())}</div>`;
-            }
-
-            return `
-              <div class="album-card">
-                <a href="/s/${safeCode}" class="album-thumb-link">
-                  ${thumbHtml}
-                </a>
-                <div class="album-card-body">
-                  <a href="/s/${safeCode}" class="album-card-title" title="${safeName}">
-                    ${safeName}
-                  </a>
-                  <div class="album-card-meta">
-                    <span>${escapeHtml(formatBytes(f.size))}</span>
-                    <span>${Number(f.downloads) || 0} dl</span>
-                  </div>
-                  <div class="album-card-actions">
-                    <button type="button" class="btn btn-secondary btn-sm copy-direct" data-url="${safeDirectUrl}">Direct</button>
-                    <a href="${safeDownloadUrl}" class="btn btn-primary btn-sm">Download</a>
-                  </div>
-                </div>
-              </div>
-            `;
-          })
-          .join('');
-
-        albumMain.innerHTML = `
-          <div class="card" style="margin-bottom: 20px; border-left: 3px solid var(--accent);">
-            <div style="display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap;">
-              <div>
-                <span class="meta-pill pill-crimson">/c/${escapeHtml(album.short)}</span>
-                <h1 style="font-size: 1.35rem; font-weight: 600; margin-top: 8px;">${escapeHtml(album.title)}</h1>
-                ${album.description ? `<p style="color: var(--text-secondary); font-size: 0.86rem; margin-top: 4px;">${escapeHtml(album.description)}</p>` : ''}
-                <div class="file-sub" style="margin-top: 8px;">
-                  <span>${album.files.length} files</span>
-                  <span>${escapeHtml(formatBytes(totalBytes))}</span>
-                </div>
-              </div>
-              <div style="display: flex; align-items: center; gap: 12px;">
-                <button type="button" id="copyAlbumUrlBtn" class="btn btn-primary btn-sm">Copy Link</button>
-                <div class="qr-box" style="padding: 6px;">
-                  <img src="${escapeHtml(album.qrCodeDataUrl)}" alt="Album QR" style="width: 76px; height: 76px;" />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="album-grid">
-            ${cardsHtml}
-          </div>
-        `;
-
-        document.getElementById('copyAlbumUrlBtn').addEventListener('click', () => {
-          copyText(album.albumUrl, 'Album link');
-        });
-
-        document.querySelectorAll('.copy-direct').forEach((btn) => {
-          btn.addEventListener('click', () => copyText(btn.dataset.url, 'Direct link'));
-          btn.addEventListener('auxclick', (e) => {
-            if (e.button === 1) window.open(btn.dataset.url, '_blank', 'noopener,noreferrer');
-          });
-        });
-      } catch (err) {
-        console.error(err);
-      }
-    }
-
-    loadAlbum();
-  </script>
+  <script src="/qr.js" defer></script>
+  <script src="/app-album.js" defer></script>
 </body>
 </html>
