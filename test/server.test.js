@@ -219,7 +219,7 @@ describe('sera-drop Security & Legal Compliance Suite', () => {
     });
     assert.equal(invalidReportRes.status, 400);
 
-    const validReportRes = await fetch(`${baseUrl}/api/report`, {
+    const publicReportRes = await fetch(`${baseUrl}/api/report`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -231,23 +231,111 @@ describe('sera-drop Security & Legal Compliance Suite', () => {
         goodFaithConfirmed: true
       })
     });
-    assert.equal(validReportRes.status, 201);
-    const reportBody = await validReportRes.json();
-    assert.match(reportBody.reportId, /^rep_/);
-    assert.equal(reportBody.status, 'action_taken');
-    assert.equal(reportBody.mitigated, true);
+    assert.equal(publicReportRes.status, 201);
+    const publicBody = await publicReportRes.json();
+    assert.match(publicBody.reportId, /^rep_/);
+    assert.equal(publicBody.status, 'received');
+    assert.equal(publicBody.mitigated, false);
+
+    const checkStillExists = await fetch(`${baseUrl}/api/files/${uploaded.code}`);
+    assert.equal(checkStillExists.status, 200);
+
+    const adminReportRes = await fetch(`${baseUrl}/api/report`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer test-super-secret-admin-token-999'
+      },
+      body: JSON.stringify({
+        targetCode: uploaded.code,
+        category: 'copyright',
+        explanation: 'Administrative takedown confirmed after human review.',
+        notifierName: 'Compliance Officer',
+        notifierEmail: 'officer@sera-compliance.test',
+        goodFaithConfirmed: true
+      })
+    });
+    assert.equal(adminReportRes.status, 201);
+    const adminBody = await adminReportRes.json();
+    assert.match(adminBody.reportId, /^rep_/);
+    assert.equal(adminBody.status, 'action_taken');
+    assert.equal(adminBody.mitigated, true);
 
     const checkDeleted = await fetch(`${baseUrl}/api/files/${uploaded.code}`);
     assert.equal(checkDeleted.status, 404);
 
     const reportsDiskRaw = fs.readFileSync(path.join(testDataDir, 'reports.json'), 'utf8');
     const reportsList = JSON.parse(reportsDiskRaw);
-    assert.equal(reportsList.length, 1);
-    assert.equal(reportsList[0].reportId, reportBody.reportId);
+    assert.equal(reportsList.length, 2);
+    assert.equal(reportsList[0].reportId, publicBody.reportId);
+    assert.equal(reportsList[1].reportId, adminBody.reportId);
     assert.ok(
       typeof reportsList[0].clientIpHash === 'string' && /^[a-f0-9]{64}$/.test(reportsList[0].clientIpHash),
       'Stored report must contain 64-char hex HMAC-SHA256 clientIpHash'
     );
     assert.ok(!reportsDiskRaw.includes('127.0.0.1'), 'Raw client IP must never be written to reports.json');
+  });
+
+  it('preserves UTF-8 multibyte characters in uploaded filenames', async () => {
+    const textBuf = Buffer.from('Multibyte filename content', 'utf8');
+    const filename = 'привет-мир-äöü-🚀.txt';
+    const upRes = await uploadMultipartFile({
+      filename,
+      contentType: 'text/plain',
+      buffer: textBuf,
+      fields: { ttl: '1h' }
+    });
+    assert.equal(upRes.status, 201);
+    const uploaded = await upRes.json();
+    assert.equal(uploaded.originalName, filename);
+  });
+
+  it('rejects uncompressed IPv6 loopback and mapped loopback addresses in URL upload', async () => {
+    const res1 = await fetch(`${baseUrl}/api/url-upload`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'sera.drop'
+      },
+      body: JSON.stringify({ url: 'http://[0:0:0:0:0:0:0:1]:8080/test' })
+    });
+    assert.equal(res1.status, 412);
+
+    const res2 = await fetch(`${baseUrl}/api/url-upload`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'sera.drop'
+      },
+      body: JSON.stringify({ url: 'http://[::ffff:127.0.0.1]:8080/test' })
+    });
+    assert.equal(res2.status, 412);
+  });
+
+  it('enforces atomic validation on Catbox batch file deletion', async () => {
+    const textBuf = Buffer.from('Keep safe', 'utf8');
+    const userhash = 'catbox-test-userhash-777';
+    const upRes = await uploadMultipartFile({
+      filename: 'catbox-doc.txt',
+      contentType: 'text/plain',
+      buffer: textBuf,
+      fields: { userhash }
+    });
+    assert.equal(upRes.status, 201);
+    const uploaded = await upRes.json();
+
+    const delRes = await fetch(`${baseUrl}/user/api.php`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        reqtype: 'deletefiles',
+        userhash,
+        files: `${uploaded.code}.txt nonexistent123.txt`
+      }).toString()
+    });
+    assert.equal(delRes.status, 400);
+
+    const checkStillExists = await fetch(`${baseUrl}/api/files/${uploaded.code}`);
+    assert.equal(checkStillExists.status, 200);
   });
 });

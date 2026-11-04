@@ -67,6 +67,21 @@
     }
   }
 
+  function sanitizeUrl(url) {
+    if (typeof url !== 'string') return '#';
+    const trimmed = url.trim();
+    if (trimmed.startsWith('/') && !trimmed.startsWith('//') && !trimmed.startsWith('/\\')) {
+      return trimmed;
+    }
+    try {
+      const parsed = new URL(trimmed, window.location.origin);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return parsed.href;
+      }
+    } catch {}
+    return '#';
+  }
+
   async function loadAlbum() {
     const parts = window.location.pathname.split('/').filter(Boolean);
     const short = parts[parts.length - 1];
@@ -94,9 +109,9 @@
 
       const cardsHtml = album.files
         .map((f) => {
-          const safeRawUrl = escapeHtml(f.rawUrl);
-          const safeDownloadUrl = escapeHtml(f.downloadUrl);
-          const safeDirectUrl = escapeHtml(f.directUrl || f.rawUrl);
+          const safeRawUrl = escapeHtml(sanitizeUrl(f.rawUrl));
+          const safeDownloadUrl = escapeHtml(sanitizeUrl(f.downloadUrl));
+          const safeDirectUrl = escapeHtml(sanitizeUrl(f.directUrl || f.rawUrl));
           const safeName = escapeHtml(f.originalName);
           const safeCode = escapeHtml(f.code);
           let thumbHtml = '';

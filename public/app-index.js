@@ -494,6 +494,14 @@
     });
   });
 
+  window.addEventListener('dragover', (e) => {
+    e.preventDefault();
+  });
+
+  window.addEventListener('drop', (e) => {
+    e.preventDefault();
+  });
+
   ['dragleave', 'drop'].forEach((evt) => {
     dropzone.addEventListener(evt, (e) => {
       e.preventDefault();
@@ -693,12 +701,19 @@
 
   async function loadFiles() {
     try {
-      const ownedCodes = Object.keys(getOwnedFilesMap());
-      const query = ownedCodes.length ? `?codes=${encodeURIComponent(ownedCodes.join(','))}` : '';
+      const ownedCodes = Object.keys(getOwnedFilesMap()).reverse();
+      const query = ownedCodes.length ? `?codes=${encodeURIComponent(ownedCodes.slice(0, 100).join(','))}` : '';
       const res = await fetch(`/api/files${query}`);
       const files = await res.json();
       currentLoadedFiles = Array.isArray(files) ? files : [];
       fileCountLabel.textContent = `${currentLoadedFiles.length}`;
+
+      const returnedCodes = new Set(currentLoadedFiles.map((f) => f.code));
+      for (const code of ownedCodes.slice(0, 100)) {
+        if (!returnedCodes.has(code)) {
+          removeOwnedFileToken(code);
+        }
+      }
 
       if (currentLoadedFiles.length === 0) {
         fileList.innerHTML = `<div class="card empty-state">No files</div>`;

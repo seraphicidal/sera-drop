@@ -258,6 +258,9 @@ function requireAdminAuth(req, res, next) {
   next();
 }
 
+let memoryDbCache = null;
+let saveDbTimeout = null;
+
 function sanitizeMapObject(parsed) {
   const clean = {};
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -272,29 +275,70 @@ function sanitizeMapObject(parsed) {
 
 function loadDatabase() {
   try {
+    if (!fs.existsSync(DB_FILE)) {
+      memoryDbCache = {};
+      return {};
+    }
     const raw = fs.readFileSync(DB_FILE, 'utf8');
-    return sanitizeMapObject(JSON.parse(raw));
+    const parsed = sanitizeMapObject(JSON.parse(raw));
+    memoryDbCache = parsed;
+    return parsed;
   } catch {
+    if (memoryDbCache !== null) {
+      return memoryDbCache;
+    }
     return {};
   }
 }
 
 function saveDatabase(db) {
+  if (saveDbTimeout) {
+    clearTimeout(saveDbTimeout);
+    saveDbTimeout = null;
+  }
+  memoryDbCache = db;
   const tmpFile = `${DB_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   fs.writeFileSync(tmpFile, JSON.stringify(db, null, 2), 'utf8');
   fs.renameSync(tmpFile, DB_FILE);
 }
 
+function scheduleDatabaseSave(db) {
+  memoryDbCache = db;
+  if (!saveDbTimeout) {
+    saveDbTimeout = setTimeout(() => {
+      saveDbTimeout = null;
+      try {
+        const tmpFile = `${DB_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+        fs.writeFileSync(tmpFile, JSON.stringify(memoryDbCache, null, 2), 'utf8');
+        fs.renameSync(tmpFile, DB_FILE);
+      } catch {}
+    }, 1000);
+    saveDbTimeout.unref();
+  }
+}
+
+let memoryAlbumsCache = null;
+
 function loadAlbums() {
   try {
+    if (!fs.existsSync(ALBUMS_FILE)) {
+      memoryAlbumsCache = {};
+      return {};
+    }
     const raw = fs.readFileSync(ALBUMS_FILE, 'utf8');
-    return sanitizeMapObject(JSON.parse(raw));
+    const parsed = sanitizeMapObject(JSON.parse(raw));
+    memoryAlbumsCache = parsed;
+    return parsed;
   } catch {
+    if (memoryAlbumsCache !== null) {
+      return memoryAlbumsCache;
+    }
     return {};
   }
 }
 
 function saveAlbums(albums) {
+  memoryAlbumsCache = albums;
   const tmpFile = `${ALBUMS_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   fs.writeFileSync(tmpFile, JSON.stringify(albums, null, 2), 'utf8');
   fs.renameSync(tmpFile, ALBUMS_FILE);
@@ -316,16 +360,28 @@ function saveReports(reports) {
   fs.renameSync(tmpFile, REPORTS_FILE);
 }
 
+let memoryBlockedCache = null;
+
 function loadBlockedHashes() {
   try {
+    if (!fs.existsSync(BLOCKED_HASHES_FILE)) {
+      memoryBlockedCache = {};
+      return {};
+    }
     const raw = fs.readFileSync(BLOCKED_HASHES_FILE, 'utf8');
-    return sanitizeMapObject(JSON.parse(raw));
+    const parsed = sanitizeMapObject(JSON.parse(raw));
+    memoryBlockedCache = parsed;
+    return parsed;
   } catch {
+    if (memoryBlockedCache !== null) {
+      return memoryBlockedCache;
+    }
     return {};
   }
 }
 
 function saveBlockedHashes(blocked) {
+  memoryBlockedCache = blocked;
   const tmpFile = `${BLOCKED_HASHES_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   fs.writeFileSync(tmpFile, JSON.stringify(blocked, null, 2), 'utf8');
   fs.renameSync(tmpFile, BLOCKED_HASHES_FILE);
@@ -368,6 +424,26 @@ function reapExpiredFiles() {
 
     if (changed) {
       saveDatabase(db);
+    }
+
+    if (fs.existsSync(UPLOADS_DIR)) {
+      const referenced = new Set(
+        Object.values(db)
+          .map((r) => r && r.storedName && path.basename(r.storedName))
+          .filter(Boolean)
+      );
+      const diskFiles = fs.readdirSync(UPLOADS_DIR);
+      for (const diskFile of diskFiles) {
+        if (!diskFile.endsWith('.bin')) continue;
+        if (referenced.has(diskFile)) continue;
+        const fullPath = path.join(UPLOADS_DIR, diskFile);
+        try {
+          const stats = fs.statSync(fullPath);
+          if (now - stats.mtimeMs > 10 * 60 * 1000) {
+            safeUnlink(fullPath);
+          }
+        } catch {}
+      }
     }
   } catch (err) {
     console.error('TTL reaper error:', err.message);
@@ -479,6 +555,16 @@ function getTotalStorageUsed(db) {
     }
   }
   return total;
+}
+
+function decodeOriginalName(rawName) {
+  if (typeof rawName !== 'string') return 'unnamed';
+  if (/[^\x00-\xFF]/.test(rawName)) return rawName;
+  try {
+    const decoded = Buffer.from(rawName, 'latin1').toString('utf8');
+    if (!decoded.includes('\uFFFD')) return decoded;
+  } catch {}
+  return rawName;
 }
 
 function getSafeExtension(filename) {
@@ -678,7 +764,8 @@ function resolveBaseUrl(req) {
   return `http://localhost:${PORT}`;
 }
 
-async function buildFileResponse(req, record) {
+async function buildFileResponse(req, record, options = {}) {
+  const includeQr = options.includeQr !== false;
   const baseUrl = resolveBaseUrl(req);
   const ext = getSafeExtension(record.originalName);
   const shortUrl = `${baseUrl}/s/${record.code}`;
@@ -701,14 +788,17 @@ async function buildFileResponse(req, record) {
   const rawUrl = `${baseUrl}${rawPath}`;
   const directUrl = `${baseUrl}${directFilePath}`;
 
-  const qrCodeDataUrl = await QRCode.toDataURL(shortUrl, {
-    width: 280,
-    margin: 2,
-    color: {
-      dark: '#000000',
-      light: '#ffffff'
-    }
-  });
+  let qrCodeDataUrl = null;
+  if (includeQr) {
+    qrCodeDataUrl = await QRCode.toDataURL(shortUrl, {
+      width: 280,
+      margin: 4,
+      color: {
+        dark: '#000000',
+        light: '#ffffff'
+      }
+    });
+  }
 
   return {
     code: record.code,
@@ -846,25 +936,57 @@ async function registerUploadedFile({
   return { record, deleteToken };
 }
 
+function parseIpv6Words(addr) {
+  let lower = addr.toLowerCase().trim();
+  if (lower.startsWith('[') && lower.endsWith(']')) {
+    lower = lower.slice(1, -1);
+  }
+  const zoneIndex = lower.indexOf('%');
+  if (zoneIndex !== -1) {
+    lower = lower.slice(0, zoneIndex);
+  }
+  const doubleColon = lower.indexOf('::');
+  let headParts = [];
+  let tailParts = [];
+  if (doubleColon !== -1) {
+    const head = lower.slice(0, doubleColon);
+    const tail = lower.slice(doubleColon + 2);
+    headParts = head ? head.split(':') : [];
+    tailParts = tail ? tail.split(':') : [];
+  } else {
+    headParts = lower.split(':');
+  }
+
+  const expandPart = (part) => {
+    if (net.isIPv4(part)) {
+      const octets = part.split('.').map(Number);
+      return [((octets[0] << 8) | octets[1]) >>> 0, ((octets[2] << 8) | octets[3]) >>> 0];
+    }
+    return [parseInt(part, 16)];
+  };
+
+  const headWords = [];
+  for (const p of headParts) {
+    headWords.push(...expandPart(p));
+  }
+  const tailWords = [];
+  for (const p of tailParts) {
+    tailWords.push(...expandPart(p));
+  }
+
+  if (doubleColon !== -1) {
+    const missing = 8 - (headWords.length + tailWords.length);
+    if (missing < 0) return null;
+    const zeros = new Array(missing).fill(0);
+    return [...headWords, ...zeros, ...tailWords];
+  }
+  return headWords.length === 8 ? headWords : null;
+}
+
 function isPrivateOrReservedIp(ip) {
   if (typeof ip !== 'string' || !net.isIP(ip)) return true;
   const lower = ip.toLowerCase().trim();
   if (lower === '127.0.0.1' || lower === '0.0.0.0' || lower === '::1' || lower === '::') return true;
-
-  if (lower.startsWith('::ffff:')) {
-    const tail = lower.slice(7);
-    if (net.isIPv4(tail)) {
-      return isPrivateOrReservedIp(tail);
-    }
-    const hexMatch = tail.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-    if (hexMatch) {
-      const hi = parseInt(hexMatch[1], 16);
-      const lo = parseInt(hexMatch[2], 16);
-      const v4 = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
-      return isPrivateOrReservedIp(v4);
-    }
-    return true;
-  }
 
   if (net.isIPv4(lower)) {
     const parts = lower.split('.').map(Number);
@@ -881,20 +1003,48 @@ function isPrivateOrReservedIp(ip) {
     return false;
   }
 
+  const words = parseIpv6Words(lower);
+  if (!words) return true;
+
   if (
-    lower.startsWith('fc') ||
-    lower.startsWith('fd') ||
-    lower.startsWith('fe8') ||
-    lower.startsWith('fe9') ||
-    lower.startsWith('fea') ||
-    lower.startsWith('feb') ||
-    lower.startsWith('ff') ||
-    lower.startsWith('2001:db8:') ||
-    lower.startsWith('64:ff9b:') ||
-    lower.startsWith('100::')
+    words[0] === 0 &&
+    words[1] === 0 &&
+    words[2] === 0 &&
+    words[3] === 0 &&
+    words[4] === 0 &&
+    words[5] === 0 &&
+    words[6] === 0 &&
+    words[7] === 1
   ) {
     return true;
   }
+
+  if (words.every((w) => w === 0)) {
+    return true;
+  }
+
+  if (
+    (words[0] === 0 && words[1] === 0 && words[2] === 0 && words[3] === 0 && words[4] === 0 && words[5] === 0xffff) ||
+    (words[0] === 0 && words[1] === 0 && words[2] === 0 && words[3] === 0 && words[4] === 0 && words[5] === 0)
+  ) {
+    const v4 = `${(words[6] >> 8) & 0xff}.${words[6] & 0xff}.${(words[7] >> 8) & 0xff}.${words[7] & 0xff}`;
+    return isPrivateOrReservedIp(v4);
+  }
+
+  if ((words[0] & 0xfe00) === 0xfc00) return true;
+  if ((words[0] & 0xffc0) === 0xfe80) return true;
+  if ((words[0] & 0xff00) === 0xff00) return true;
+  if (words[0] === 0x2001 && words[1] === 0x0db8) return true;
+  if (words[0] === 0x0100 && words[1] === 0 && words[2] === 0 && words[3] === 0) return true;
+  if (words[0] === 0x0064 && words[1] === 0xff9b) {
+    const v4 = `${(words[6] >> 8) & 0xff}.${words[6] & 0xff}.${(words[7] >> 8) & 0xff}.${words[7] & 0xff}`;
+    return isPrivateOrReservedIp(v4);
+  }
+  if (words[0] === 0x2002) {
+    const v4 = `${(words[1] >> 8) & 0xff}.${words[1] & 0xff}.${(words[2] >> 8) & 0xff}.${words[2] & 0xff}`;
+    return isPrivateOrReservedIp(v4);
+  }
+
   return false;
 }
 
@@ -1298,7 +1448,8 @@ app.post('/api/report', reportRateLimiter, (req, res) => {
 
     let mitigated = false;
     const resolvedCode = extractCodeFromTarget(targetUrl, targetCode);
-    if (resolvedCode && ['copyright', 'malware', 'illegal_content'].includes(category)) {
+    const isAdmin = hasValidAdminAuth(req);
+    if (isAdmin && resolvedCode && ['copyright', 'malware', 'illegal_content'].includes(category)) {
       const db = loadDatabase();
       const record = getRecordByCode(db, resolvedCode);
       if (record) {
@@ -1366,7 +1517,7 @@ app.get('/api/admin/files', requireAdminAuth, async (req, res) => {
       );
     }
     records.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    const results = await Promise.all(records.map((r) => buildFileResponse(req, r)));
+    const results = await Promise.all(records.map((r) => buildFileResponse(req, r, { includeQr: false })));
     res.json({ files: results, total: results.length });
   } catch {
     res.status(500).json({ error: 'Failed to search files' });
@@ -1488,7 +1639,7 @@ app.post(
         return res.status(400).json({ error: 'No file provided' });
       }
 
-      const rawOriginalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+      const rawOriginalName = decodeOriginalName(req.file.originalname);
       const ttl = String(req.body?.ttl || 'permanent').trim();
       const codeLength = parseInt(req.body?.codeLength || '8', 10);
       const requireSignedUrl =
@@ -1555,6 +1706,12 @@ const catboxUploadMiddleware = multer({
 }).single('fileToUpload');
 
 app.post('/user/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
+  const secFetchSite = req.headers['sec-fetch-site'];
+  const origin = req.headers.origin;
+  if (secFetchSite === 'cross-site' && origin) {
+    return res.status(403).type('text/plain').send('Cross-site requests not allowed.');
+  }
+
   catboxUploadMiddleware(req, res, async (multerErr) => {
     if (multerErr) {
       return res.status(413).type('text/plain').send(multerErr.message);
@@ -1573,7 +1730,7 @@ app.post('/user/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
         if (!req.file) {
           return res.status(400).type('text/plain').send('No fileToUpload provided.');
         }
-        const rawOriginalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+        const rawOriginalName = decodeOriginalName(req.file.originalname);
         const { record } = await registerUploadedFile({
           tempFilePath: req.file.path,
           rawOriginalName,
@@ -1620,12 +1777,16 @@ app.post('/user/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
         }
         const db = loadDatabase();
         const expectedHash = userhash ? hashToken(userhash) : null;
+        const targets = [];
         for (const f of filesList) {
           const code = path.basename(f).split('.')[0];
           const rec = getRecordByCode(db, code);
           if (!rec || (!isAdmin && (!rec.userhash || !expectedHash || !safeTimingEqualStrings(rec.userhash, expectedHash)))) {
             return res.status(400).type('text/plain').send(`File ${f} doesn't exist or unauthorized.`);
           }
+          targets.push({ code, rec });
+        }
+        for (const { code, rec } of targets) {
           const storedName = rec.storedName;
           delete db[code];
           if (!isStoredFileReferenced(db, storedName, code)) {
@@ -1726,7 +1887,7 @@ app.post('/resources/internals/api.php', uploadRateLimiter, preUploadGuard, (req
         return res.status(400).type('text/plain').send('Invalid time parameter (1h, 12h, 24h, 72h).');
       }
       const fileNameLength = parseInt(req.body?.fileNameLength || '6', 10) === 16 ? 16 : 6;
-      const rawOriginalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+      const rawOriginalName = decodeOriginalName(req.file.originalname);
 
       const { record } = await registerUploadedFile({
         tempFilePath: req.file.path,
@@ -1843,7 +2004,7 @@ app.get('/api/files', lookupRateLimiter, async (req, res) => {
         .split(',')
         .map((c) => c.trim())
         .filter((c) => /^[a-zA-Z0-9]{6,16}$/.test(c))
-        .slice(0, 50);
+        .slice(0, 100);
       records = requestedCodes.map((c) => getRecordByCode(db, c)).filter(Boolean);
     } else {
       if (!hasValidAdminAuth(req)) {
@@ -1853,7 +2014,7 @@ app.get('/api/files', lookupRateLimiter, async (req, res) => {
     }
 
     records.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    const results = await Promise.all(records.map((r) => buildFileResponse(req, r)));
+    const results = await Promise.all(records.map((r) => buildFileResponse(req, r, { includeQr: false })));
     res.json(results);
   } catch (err) {
     console.error('List error:', err);
@@ -1868,6 +2029,21 @@ app.get('/api/files/:code', lookupRateLimiter, async (req, res) => {
     const record = getRecordByCode(db, req.params.code);
     if (!record) {
       return res.status(404).json({ error: 'Shared file not found or has expired' });
+    }
+
+    if (record.requireSignedUrl) {
+      const deleteHeader = String(req.headers['x-delete-token'] || '').trim();
+      const hasOwnerToken = Boolean(
+        deleteHeader &&
+          record.deleteTokenHash &&
+          safeTimingEqualStrings(record.deleteTokenHash, hashToken(deleteHeader))
+      );
+      const sigOk =
+        verifySecureLink(`/s/${record.code}`, req.query.sig, req.query.expires).ok ||
+        verifySecureLink(req.path, req.query.sig, req.query.expires).ok;
+      if (!sigOk && !hasOwnerToken && !hasValidAdminAuth(req)) {
+        return res.status(403).json({ error: 'Valid signature or authorization required for signed file.' });
+      }
     }
 
     const filePath = path.join(UPLOADS_DIR, path.basename(record.storedName));
@@ -2043,7 +2219,7 @@ app.get('/d/:code', lookupRateLimiter, (req, res) => {
     }
 
     record.downloads = (record.downloads || 0) + 1;
-    saveDatabase(db);
+    scheduleDatabaseSave(db);
 
     res.download(filePath, record.originalName);
   } catch {

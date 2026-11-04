@@ -319,12 +319,27 @@
     }
   });
 
+  function sanitizeUrl(url) {
+    if (typeof url !== 'string') return '#';
+    const trimmed = url.trim();
+    if (trimmed.startsWith('/') && !trimmed.startsWith('//') && !trimmed.startsWith('/\\')) {
+      return trimmed;
+    }
+    try {
+      const parsed = new URL(trimmed, window.location.origin);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return parsed.href;
+      }
+    } catch {}
+    return '#';
+  }
+
   async function loadSharedFile() {
     const pathParts = window.location.pathname.split('/').filter(Boolean);
     const code = pathParts[pathParts.length - 1];
 
     try {
-      const res = await fetch(`/api/files/${encodeURIComponent(code)}`);
+      const res = await fetch(`/api/files/${encodeURIComponent(code)}${window.location.search}`);
       if (!res.ok) {
         showInlineError('The requested file does not exist or has expired.');
         mainContent.innerHTML = `
@@ -373,7 +388,7 @@
                 ${shaLine}
               </div>
               <div class="share-header-actions">
-                <a href="${escapeHtml(file.downloadUrl)}" id="downloadBtn" class="btn btn-primary btn-lg">Download</a>
+                <a href="${escapeHtml(sanitizeUrl(file.downloadUrl))}" id="downloadBtn" class="btn btn-primary btn-lg">Download</a>
                 <button type="button" id="shareReportBtn" class="btn btn-danger btn-sm">Report Abuse</button>
               </div>
             </div>
@@ -462,7 +477,7 @@
 
   async function renderPreview(file, container) {
     const cat = file.previewCategory;
-    const safeRawUrl = escapeHtml(file.rawUrl);
+    const safeRawUrl = escapeHtml(sanitizeUrl(file.rawUrl));
     const safeName = escapeHtml(file.originalName);
     if (cat === 'image') {
       container.innerHTML = `

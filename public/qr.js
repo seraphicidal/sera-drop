@@ -245,7 +245,7 @@
     const sizePx = pixelSize || 240;
     const matrix = encodeMatrix(text);
     const n = matrix.length;
-    const margin = 2;
+    const margin = 4;
     const total = n + margin * 2;
     let path = '';
     for (let r = 0; r < n; r++) {
@@ -268,7 +268,7 @@
       const sizePx = pixelSize || 240;
       const matrix = encodeMatrix(text);
       const n = matrix.length;
-      const margin = 2;
+      const margin = 4;
       const total = n + margin * 2;
       const scale = Math.max(4, Math.floor(sizePx / total));
       const canvasSize = total * scale;
