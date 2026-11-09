@@ -15,7 +15,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.disable('x-powered-by');
-app.set('trust proxy', 1);
+app.set('trust proxy', true);
 
 const defaultStorageRoot =
   fs.existsSync('/var/data') && fs.statSync('/var/data').isDirectory()
@@ -331,14 +331,16 @@ app.use((req, res, next) => {
 });
 
 function getClientIp(req) {
-  if (process.env.TRUST_CF_HEADERS === 'true' && typeof req.headers['cf-connecting-ip'] === 'string') {
-    return req.headers['cf-connecting-ip'].trim();
+  const cfHeader = req.headers['cf-connecting-ip'];
+  if (typeof cfHeader === 'string' && net.isIP(cfHeader.trim())) {
+    return cfHeader.trim();
   }
-  if (typeof req.headers['x-real-ip'] === 'string' && req.headers['x-real-ip'].trim()) {
-    const candidate = req.headers['x-real-ip'].trim();
-    if (net.isIP(candidate)) return candidate;
+  const candidate = req.ip;
+  if (typeof candidate === 'string' && candidate.trim()) {
+    const clean = candidate.startsWith('::ffff:') ? candidate.slice(7) : candidate;
+    if (net.isIP(clean)) return clean;
   }
-  return req.ip || req.socket?.remoteAddress || 'unknown';
+  return req.socket?.remoteAddress || 'unknown';
 }
 
 function hashClientIp(req) {
