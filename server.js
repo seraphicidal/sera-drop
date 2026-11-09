@@ -189,6 +189,51 @@ function loadOrCreateSecret() {
 const SECURE_LINK_SECRET = loadOrCreateSecret();
 
 app.use((req, res, next) => {
+  const upstreamTarget = process.env.UPSTREAM_URL ? process.env.UPSTREAM_URL.trim().replace(/\/+$/, '') : null;
+  if (!upstreamTarget) {
+    return next();
+  }
+
+  const urlObj = new URL(upstreamTarget);
+  const isHttps = urlObj.protocol === 'https:';
+  const transport = isHttps ? https : http;
+  const targetUrl = new URL(req.url, upstreamTarget);
+
+  const headers = { ...req.headers };
+  headers.host = urlObj.host;
+  headers['x-forwarded-host'] = req.headers.host || '';
+  headers['x-forwarded-proto'] = req.protocol || 'https';
+  headers['x-forwarded-for'] = req.headers['x-forwarded-for']
+    ? `${req.headers['x-forwarded-for']}, ${req.socket.remoteAddress}`
+    : req.socket.remoteAddress;
+
+  const proxyReq = transport.request(
+    targetUrl,
+    {
+      method: req.method,
+      headers,
+      timeout: 300000
+    },
+    (proxyRes) => {
+      res.writeHead(proxyRes.statusCode, proxyRes.headers);
+      proxyRes.pipe(res);
+    }
+  );
+
+  proxyReq.on('error', () => {
+    if (!res.headersSent) {
+      res.status(502).json({ error: 'Bad Gateway: failed to connect to upstream server.' });
+    }
+  });
+
+  req.on('aborted', () => {
+    proxyReq.destroy();
+  });
+
+  req.pipe(proxyReq);
+});
+
+app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');

@@ -2,33 +2,13 @@ services:
   - type: web
     name: sera-drop
     runtime: node
-    plan: starter
+    plan: free
     buildCommand: npm install
     startCommand: node server.js
-    disk:
-      name: sera-drop-data
-      mountPath: /var/data
-      sizeGB: 10
     envVars:
       - key: PUBLIC_URL
         value: https://sera-drop.onrender.com
       - key: DISABLE_TUNNEL
         value: "true"
-      - key: DATA_DIR
-        value: /var/data/data
-      - key: UPLOADS_DIR
-        value: /var/data/uploads
-      - key: S3_BUCKET
-        sync: false
-      - key: S3_ENDPOINT
-        sync: false
-      - key: SERA_DROP_SECRET
-        generateValue: true
-      - key: ADMIN_TOKEN
-        generateValue: true
-      - key: OPERATOR_NAME
-        sync: false
-      - key: OPERATOR_ADDRESS
-        sync: false
-      - key: OPERATOR_EMAIL
-        sync: false
+      - key: UPSTREAM_URL
+        value: https://drop.130-61-188-184.sslip.io

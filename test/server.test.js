@@ -451,4 +451,28 @@ describe('sera-drop Security & Legal Compliance Suite', () => {
     assert.ok(typeof data.uploadsDir === 'string');
     assert.ok(typeof data.isPersistentDisk === 'boolean');
   });
+
+  it('transparently reverse proxies requests when UPSTREAM_URL is configured', async () => {
+    let mockReceivedPath = '';
+    const mockUpstream = http.createServer((req, res) => {
+      mockReceivedPath = req.url;
+      res.writeHead(200, { 'Content-Type': 'application/json', 'X-Custom-Upstream': 'active' });
+      res.end(JSON.stringify({ proxied: true, echoPath: req.url }));
+    });
+    await new Promise((resolve) => mockUpstream.listen(0, '127.0.0.1', resolve));
+    const mockPort = mockUpstream.address().port;
+    process.env.UPSTREAM_URL = `http://127.0.0.1:${mockPort}`;
+
+    try {
+      const res = await fetch(`${baseUrl}/any/sample/path?test=1`);
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get('x-custom-upstream'), 'active');
+      const data = await res.json();
+      assert.equal(data.proxied, true);
+      assert.equal(mockReceivedPath, '/any/sample/path?test=1');
+    } finally {
+      delete process.env.UPSTREAM_URL;
+      await new Promise((resolve) => mockUpstream.close(resolve));
+    }
+  });
 });
