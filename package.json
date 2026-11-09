@@ -12,7 +12,7 @@
     "cloudflared": "^0.7.3",
     "express": "^4.21.2",
     "file-type": "^16.5.4",
-    "multer": "^2.4.0",
+    "multer": "^2.5.0",
     "qrcode": "^1.5.4"
   }
 }
