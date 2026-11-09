@@ -1156,13 +1156,28 @@ async function buildFileResponse(req, record, options = {}) {
     });
   }
 
+  const deleteHeader = String(req?.headers?.['x-delete-token'] || '').trim();
+  const hasDeleteToken = Boolean(
+    deleteHeader &&
+      record.deleteTokenHash &&
+      safeTimingEqualStrings(record.deleteTokenHash, hashToken(deleteHeader))
+  );
+  const isOwner = Boolean(
+    options.isOwner ||
+      hasDeleteToken ||
+      (req?.clientIdHash && record.clientIdHash && safeTimingEqualStrings(req.clientIdHash, record.clientIdHash)) ||
+      (req?.customClientHash && record.userhash && safeTimingEqualStrings(req.customClientHash, record.userhash)) ||
+      (req?.customClientHash && record.clientIdHash && safeTimingEqualStrings(req.customClientHash, record.clientIdHash)) ||
+      (req && hasValidAdminAuth(req))
+  );
+
   return {
     code: record.code,
     originalName: record.originalName,
     mimeType: delivery.contentType || record.mimeType,
     size: record.size,
     sha256: record.sha256 || null,
-    deduplicated: Boolean(record.deduplicated),
+    deduplicated: isOwner ? Boolean(record.deduplicated) : false,
     ttl: record.ttl || 'permanent',
     expiresAt: record.expiresAt || null,
     requireSignedUrl: Boolean(record.requireSignedUrl),
