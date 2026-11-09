@@ -93,6 +93,9 @@ const SAFE_INLINE_MEDIA_MIMES = new Set([
   'video/webm',
   'video/ogg',
   'video/quicktime',
+  'video/x-matroska',
+  'video/x-m4v',
+  'video/x-msvideo',
   'audio/mpeg',
   'audio/mp3',
   'audio/ogg',
@@ -104,6 +107,31 @@ const SAFE_INLINE_MEDIA_MIMES = new Set([
   'audio/mp4',
   'application/pdf'
 ]);
+
+const MIME_BY_EXT = {
+  '.mp4': 'video/mp4',
+  '.m4v': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.ogv': 'video/ogg',
+  '.ogg': 'video/ogg',
+  '.mkv': 'video/x-matroska',
+  '.avi': 'video/x-msvideo',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.flac': 'audio/flac',
+  '.aac': 'audio/aac',
+  '.m4a': 'audio/mp4',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.pdf': 'application/pdf'
+};
 
 const VALID_REPORT_CATEGORIES = new Set([
   'copyright',
@@ -663,17 +691,33 @@ function validateUploadPolicy({ originalName, mimeType, size }) {
   return null;
 }
 
-function detectPreviewCategory(mimeType, filename) {
-  const mime = (mimeType || '').toLowerCase();
-  const ext = path.extname(filename || '').toLowerCase();
+function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
 
-  if (XSS_SENSITIVE_EXTENSIONS.has(ext) || mime.includes('svg') || mime.includes('html') || mime.includes('xml')) {
+function detectPreviewCategory(mimeType, filename) {
+  const ext = path.extname(filename || '').toLowerCase();
+  const lowerMime = (mimeType || '').toLowerCase().trim();
+
+  if (XSS_SENSITIVE_EXTENSIONS.has(ext) || lowerMime.includes('svg') || lowerMime.includes('html') || lowerMime.includes('xml')) {
     return 'text';
   }
-  if (mime.startsWith('image/')) return 'image';
-  if (mime.startsWith('video/')) return 'video';
-  if (mime.startsWith('audio/')) return 'audio';
-  if (mime === 'application/pdf' || ext === '.pdf') return 'pdf';
+  if (lowerMime.startsWith('image/') || ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.bmp', '.ico'].includes(ext)) {
+    return 'image';
+  }
+  if (lowerMime.startsWith('video/') || ['.mp4', '.webm', '.ogg', '.ogv', '.mov', '.m4v', '.mkv', '.avi'].includes(ext)) {
+    return 'video';
+  }
+  if (lowerMime.startsWith('audio/') || ['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a', '.opus'].includes(ext)) {
+    return 'audio';
+  }
+  if (lowerMime === 'application/pdf' || ext === '.pdf') {
+    return 'pdf';
+  }
 
   const textExts = new Set([
     '.txt', '.md', '.json', '.js', '.ts', '.jsx', '.tsx', '.py',
@@ -681,10 +725,10 @@ function detectPreviewCategory(mimeType, filename) {
     '.ps1', '.log', '.ini', '.conf', '.sql', '.c', '.cpp', '.rs', '.go'
   ]);
   if (
-    mime.startsWith('text/') ||
-    mime === 'application/json' ||
-    mime === 'application/javascript' ||
-    mime === 'application/xml' ||
+    lowerMime.startsWith('text/') ||
+    lowerMime === 'application/json' ||
+    lowerMime === 'application/javascript' ||
+    lowerMime === 'application/xml' ||
     textExts.has(ext)
   ) {
     return 'text';
@@ -743,23 +787,18 @@ app.use(express.json({ limit: '128kb' }));
 app.use(express.urlencoded({ extended: false, limit: '128kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-const ALLOWED_HOST_REGEX = /^(localhost(:\d+)?|127\.0\.0\.1(:\d+)?|[a-z0-9-]+\.trycloudflare\.com|[a-z0-9-]+\.onrender\.com)$/i;
+const ALLOWED_HOST_REGEX = /^([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+(:\d+)?$/;
 
 function resolveBaseUrl(req) {
-  const host = (req.get('host') || '').trim();
-  if (
-    host &&
-    !host.startsWith('localhost') &&
-    !host.startsWith('127.0.0.1') &&
-    ALLOWED_HOST_REGEX.test(host)
-  ) {
-    return `https://${host}`;
-  }
   if (publicBaseUrl) {
     return publicBaseUrl.replace(/\/$/, '');
   }
-  if (ALLOWED_HOST_REGEX.test(host)) {
-    return `${req.protocol}://${host}`;
+  const host = (req.get('host') || '').trim();
+  if (host && ALLOWED_HOST_REGEX.test(host)) {
+    const isLocal = host.startsWith('localhost') || host.startsWith('127.0.0.1');
+    const isHttps = req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https' || !isLocal;
+    const proto = isHttps ? 'https' : 'http';
+    return `${proto}://${host}`;
   }
   return `http://localhost:${PORT}`;
 }
@@ -767,7 +806,11 @@ function resolveBaseUrl(req) {
 async function buildFileResponse(req, record, options = {}) {
   const includeQr = options.includeQr !== false;
   const baseUrl = resolveBaseUrl(req);
-  const ext = getSafeExtension(record.originalName);
+  let ext = getSafeExtension(record.originalName);
+  const delivery = resolveRawMediaDelivery(record);
+  if (!ext && delivery.category === 'video') {
+    ext = delivery.contentType === 'video/webm' ? '.webm' : '.mp4';
+  }
   const shortUrl = `${baseUrl}/s/${record.code}`;
   let rawPath = `/raw/${record.code}`;
   let downloadPath = `/d/${record.code}`;
@@ -803,7 +846,7 @@ async function buildFileResponse(req, record, options = {}) {
   return {
     code: record.code,
     originalName: record.originalName,
-    mimeType: record.mimeType,
+    mimeType: delivery.contentType || record.mimeType,
     size: record.size,
     sha256: record.sha256 || null,
     deduplicated: Boolean(record.deduplicated),
@@ -814,7 +857,7 @@ async function buildFileResponse(req, record, options = {}) {
     createdAt: record.createdAt,
     downloads: record.downloads || 0,
     uploadedFrom: record.uploadedFrom || 'public',
-    previewCategory: detectPreviewCategory(record.mimeType, record.originalName),
+    previewCategory: delivery.category,
     shortUrl,
     downloadUrl,
     rawUrl,
@@ -911,12 +954,20 @@ async function registerUploadedFile({
 
   const code = generateShortCode(db, codeLength, lowercaseCode);
   const deleteToken = crypto.randomBytes(16).toString('hex');
+  const cleanExt = getSafeExtension(cleanName);
+  let resolvedMime = (mimeType || '').toLowerCase().trim();
+  if ((!resolvedMime || resolvedMime === 'application/octet-stream') && MIME_BY_EXT[cleanExt]) {
+    resolvedMime = MIME_BY_EXT[cleanExt];
+  }
+  if (!resolvedMime) {
+    resolvedMime = 'application/octet-stream';
+  }
 
   const record = {
     code,
     originalName: cleanName,
     storedName,
-    mimeType: mimeType || 'application/octet-stream',
+    mimeType: resolvedMime,
     size,
     sha256,
     deduplicated,
@@ -2095,31 +2146,46 @@ app.delete('/api/files/:code', lookupRateLimiter, requireCsrfHeader, (req, res) 
 
 function resolveRawMediaDelivery(record) {
   const ext = getSafeExtension(record.originalName);
-  const lowerMime = (record.mimeType || '').toLowerCase().trim();
+  let lowerMime = (record.mimeType || '').toLowerCase().trim();
+  if ((!lowerMime || lowerMime === 'application/octet-stream') && MIME_BY_EXT[ext]) {
+    lowerMime = MIME_BY_EXT[ext];
+  }
   const category = detectPreviewCategory(lowerMime, record.originalName);
 
   if (category === 'text' || XSS_SENSITIVE_EXTENSIONS.has(ext)) {
     return {
+      category: 'text',
       contentType: 'text/plain; charset=utf-8',
       disposition: 'inline',
       isPdf: false
     };
   }
-  if (SAFE_INLINE_MEDIA_MIMES.has(lowerMime)) {
+  if (category === 'video' || category === 'audio' || category === 'image' || SAFE_INLINE_MEDIA_MIMES.has(lowerMime)) {
+    const finalMime = lowerMime || (category === 'video' ? 'video/mp4' : 'application/octet-stream');
     return {
-      contentType: lowerMime,
+      category,
+      contentType: finalMime,
       disposition: 'inline',
-      isPdf: lowerMime === 'application/pdf' || ext === '.pdf'
+      isPdf: finalMime === 'application/pdf' || ext === '.pdf'
     };
   }
   return {
+    category: 'other',
     contentType: 'application/octet-stream',
     disposition: 'attachment',
     isPdf: false
   };
 }
 
-app.head(['/raw/:code', '/files/:codeWithExt', '/f/:code'], lookupRateLimiter, (req, res, next) => {
+app.options(['/raw/:code', '/raw/:code.:ext', '/files/:codeWithExt', '/f/:code'], lookupRateLimiter, (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept');
+  res.setHeader('Access-Control-Max-Age', '86400');
+  res.status(204).end();
+});
+
+app.head(['/raw/:code', '/raw/:code.:ext', '/files/:codeWithExt', '/f/:code'], lookupRateLimiter, (req, res, next) => {
   if (req.query.stat === '1') {
     return next();
   }
@@ -2139,8 +2205,15 @@ app.head(['/raw/:code', '/files/:codeWithExt', '/f/:code'], lookupRateLimiter, (
   const delivery = resolveRawMediaDelivery(record);
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
   res.setHeader('Content-Type', delivery.contentType);
   res.setHeader('Content-Length', String(record.size || 0));
+  res.setHeader(
+    'Content-Disposition',
+    buildContentDisposition(delivery.disposition, record.originalName)
+  );
   return res.status(200).end();
 });
 
@@ -2166,26 +2239,34 @@ function serveRawMedia(req, res, rawCodeParam) {
     }
 
     const delivery = resolveRawMediaDelivery(record);
-    const cspValue = delivery.isPdf
-      ? "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'"
-      : "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'";
 
-    res.setHeader('Content-Security-Policy', cspValue);
+    if (delivery.category === 'text') {
+      res.setHeader('Content-Security-Policy', "sandbox; default-src 'none';");
+    } else if (delivery.isPdf) {
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'"
+      );
+    }
+
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
+    res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Type', delivery.contentType);
     res.setHeader(
       'Content-Disposition',
       buildContentDisposition(delivery.disposition, record.originalName)
     );
-    res.sendFile(filePath);
+    res.sendFile(filePath, { acceptRanges: true });
   } catch {
     res.status(500).send('Error serving file');
   }
 }
 
-app.get('/raw/:code', lookupRateLimiter, (req, res) => {
+app.get(['/raw/:code', '/raw/:code.:ext'], lookupRateLimiter, (req, res) => {
   serveRawMedia(req, res, req.params.code);
 });
 
@@ -2227,12 +2308,163 @@ app.get('/d/:code', lookupRateLimiter, (req, res) => {
   }
 });
 
-app.get('/s/:code', lookupRateLimiter, (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'share.html'));
+app.get(['/s/:code', '/s/:code.:ext'], lookupRateLimiter, (req, res) => {
+  const rawParam = req.params.code || '';
+  const db = loadDatabase();
+  const record = getRecordByCode(db, rawParam);
+  const shareHtmlPath = path.join(__dirname, 'public', 'share.html');
+
+  if (!record) {
+    return res.sendFile(shareHtmlPath);
+  }
+
+  try {
+    const rawTemplate = fs.readFileSync(shareHtmlPath, 'utf8');
+    const baseUrl = resolveBaseUrl(req);
+    const ext = getSafeExtension(record.originalName);
+    const delivery = resolveRawMediaDelivery(record);
+    const title = `${record.originalName} — sera.drop`;
+    const fileSizeFormatted = formatBytes(record.size);
+    const description = `${record.originalName} (${fileSizeFormatted}) — shared on sera.drop`;
+    const pageUrl = `${baseUrl}/s/${record.code}`;
+
+    let directFileExt = ext;
+    if (!directFileExt) {
+      if (delivery.category === 'video') {
+        directFileExt = delivery.contentType === 'video/webm' ? '.webm' : '.mp4';
+      } else if (delivery.category === 'audio') {
+        directFileExt = '.mp3';
+      } else if (delivery.category === 'image') {
+        directFileExt = '.png';
+      }
+    }
+
+    let directFilePath = `/files/${record.code}${directFileExt || ''}`;
+    let sigQuery = '';
+    if (record.requireSignedUrl) {
+      const expires = Math.floor(Date.now() / 1000) + SIGNED_URL_TTL_SECONDS;
+      const sig = computeSecureLinkSignature(directFilePath, expires);
+      sigQuery = `?sig=${sig}&expires=${expires}`;
+    }
+    const directMediaUrl = `${baseUrl}${directFilePath}${sigQuery}`;
+    const iconUrl = `${baseUrl}/icon.png`;
+
+    const metaTags = [
+      `<title>${escapeHtml(title)}</title>`,
+      `<meta name="description" content="${escapeHtml(description)}" />`,
+      `<meta property="og:site_name" content="sera.drop" />`,
+      `<meta property="og:title" content="${escapeHtml(record.originalName)}" />`,
+      `<meta property="og:description" content="${escapeHtml(description)}" />`,
+      `<meta property="og:url" content="${escapeHtml(pageUrl)}" />`,
+      `<meta name="theme-color" content="#d43255" />`
+    ];
+
+    if (delivery.category === 'video') {
+      metaTags.push(
+        `<meta property="og:type" content="video.other" />`,
+        `<meta property="og:video" content="${escapeHtml(directMediaUrl)}" />`,
+        `<meta property="og:video:url" content="${escapeHtml(directMediaUrl)}" />`,
+        `<meta property="og:video:secure_url" content="${escapeHtml(directMediaUrl)}" />`,
+        `<meta property="og:video:type" content="${escapeHtml(delivery.contentType)}" />`,
+        `<meta property="og:video:width" content="1280" />`,
+        `<meta property="og:video:height" content="720" />`,
+        `<meta property="og:image" content="${escapeHtml(iconUrl)}" />`,
+        `<meta property="og:image:secure_url" content="${escapeHtml(iconUrl)}" />`,
+        `<meta property="og:image:type" content="image/png" />`,
+        `<meta property="og:image:width" content="512" />`,
+        `<meta property="og:image:height" content="512" />`,
+        `<meta name="twitter:card" content="player" />`,
+        `<meta name="twitter:title" content="${escapeHtml(record.originalName)}" />`,
+        `<meta name="twitter:description" content="${escapeHtml(description)}" />`,
+        `<meta name="twitter:image" content="${escapeHtml(iconUrl)}" />`,
+        `<meta name="twitter:player" content="${escapeHtml(directMediaUrl)}" />`,
+        `<meta name="twitter:player:width" content="1280" />`,
+        `<meta name="twitter:player:height" content="720" />`,
+        `<meta name="twitter:player:stream" content="${escapeHtml(directMediaUrl)}" />`,
+        `<meta name="twitter:player:stream:content_type" content="${escapeHtml(delivery.contentType)}" />`
+      );
+    } else if (delivery.category === 'image') {
+      metaTags.push(
+        `<meta property="og:type" content="website" />`,
+        `<meta property="og:image" content="${escapeHtml(directMediaUrl)}" />`,
+        `<meta property="og:image:secure_url" content="${escapeHtml(directMediaUrl)}" />`,
+        `<meta property="og:image:type" content="${escapeHtml(delivery.contentType)}" />`,
+        `<meta name="twitter:card" content="summary_large_image" />`,
+        `<meta name="twitter:title" content="${escapeHtml(record.originalName)}" />`,
+        `<meta name="twitter:description" content="${escapeHtml(description)}" />`,
+        `<meta name="twitter:image" content="${escapeHtml(directMediaUrl)}" />`
+      );
+    } else if (delivery.category === 'audio') {
+      metaTags.push(
+        `<meta property="og:type" content="music.song" />`,
+        `<meta property="og:audio" content="${escapeHtml(directMediaUrl)}" />`,
+        `<meta property="og:audio:secure_url" content="${escapeHtml(directMediaUrl)}" />`,
+        `<meta property="og:audio:type" content="${escapeHtml(delivery.contentType)}" />`,
+        `<meta property="og:image" content="${escapeHtml(iconUrl)}" />`,
+        `<meta name="twitter:card" content="player" />`,
+        `<meta name="twitter:title" content="${escapeHtml(record.originalName)}" />`,
+        `<meta name="twitter:description" content="${escapeHtml(description)}" />`,
+        `<meta name="twitter:player" content="${escapeHtml(directMediaUrl)}" />`,
+        `<meta name="twitter:player:width" content="600" />`,
+        `<meta name="twitter:player:height" content="120" />`,
+        `<meta name="twitter:player:stream" content="${escapeHtml(directMediaUrl)}" />`,
+        `<meta name="twitter:player:stream:content_type" content="${escapeHtml(delivery.contentType)}" />`
+      );
+    } else {
+      metaTags.push(
+        `<meta property="og:type" content="website" />`,
+        `<meta property="og:image" content="${escapeHtml(iconUrl)}" />`,
+        `<meta name="twitter:card" content="summary" />`,
+        `<meta name="twitter:title" content="${escapeHtml(record.originalName)}" />`,
+        `<meta name="twitter:description" content="${escapeHtml(description)}" />`
+      );
+    }
+
+    const renderedHtml = rawTemplate.replace('<title>sera.drop</title>', metaTags.join('\n  '));
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(200).send(renderedHtml);
+  } catch {
+    return res.sendFile(shareHtmlPath);
+  }
 });
 
 app.get('/c/:short', lookupRateLimiter, (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'album.html'));
+  const albums = loadAlbums();
+  const album = getAlbumByCode(albums, req.params.short);
+  const albumHtmlPath = path.join(__dirname, 'public', 'album.html');
+
+  if (!album) {
+    return res.sendFile(albumHtmlPath);
+  }
+
+  try {
+    const rawTemplate = fs.readFileSync(albumHtmlPath, 'utf8');
+    const baseUrl = resolveBaseUrl(req);
+    const title = `${album.title || 'Album'} — sera.drop`;
+    const description = `${album.title || 'Shared Album'} (${album.files.length} files) — sera.drop`;
+    const pageUrl = `${baseUrl}/c/${album.short}`;
+    const iconUrl = `${baseUrl}/icon.png`;
+
+    const metaTags = [
+      `<title>${escapeHtml(title)}</title>`,
+      `<meta name="description" content="${escapeHtml(description)}" />`,
+      `<meta property="og:site_name" content="sera.drop" />`,
+      `<meta property="og:title" content="${escapeHtml(album.title || 'Shared Album')}" />`,
+      `<meta property="og:description" content="${escapeHtml(description)}" />`,
+      `<meta property="og:type" content="website" />`,
+      `<meta property="og:url" content="${escapeHtml(pageUrl)}" />`,
+      `<meta property="og:image" content="${escapeHtml(iconUrl)}" />`,
+      `<meta name="twitter:card" content="summary" />`,
+      `<meta name="twitter:title" content="${escapeHtml(album.title || 'Shared Album')}" />`,
+      `<meta name="twitter:description" content="${escapeHtml(description)}" />`
+    ];
+
+    const renderedHtml = rawTemplate.replace('<title>sera.drop</title>', metaTags.join('\n  '));
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(200).send(renderedHtml);
+  } catch {
+    return res.sendFile(albumHtmlPath);
+  }
 });
 
 async function startPublicTunnel() {

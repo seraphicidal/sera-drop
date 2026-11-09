@@ -338,4 +338,77 @@ describe('sera-drop Security & Legal Compliance Suite', () => {
     const checkStillExists = await fetch(`${baseUrl}/api/files/${uploaded.code}`);
     assert.equal(checkStillExists.status, 200);
   });
+
+  it('serves shared videos with Open Graph video and Twitter player tags for Discord unfurl', async () => {
+    const mp4Header = Buffer.from('000000186674797069736f6d0000020069736f6d6d703432', 'hex');
+    const mp4Body = Buffer.alloc(512, 0x41);
+    const mp4Buffer = Buffer.concat([mp4Header, mp4Body]);
+    const upRes = await uploadMultipartFile({
+      filename: 'gameplay.mp4',
+      contentType: 'video/mp4',
+      buffer: mp4Buffer
+    });
+    assert.equal(upRes.status, 201);
+    const uploaded = await upRes.json();
+    assert.equal(uploaded.previewCategory, 'video');
+    assert.equal(uploaded.mimeType, 'video/mp4');
+
+    const discordCrawlerRes = await fetch(`${baseUrl}/s/${uploaded.code}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)'
+      }
+    });
+    assert.equal(discordCrawlerRes.status, 200);
+    const html = await discordCrawlerRes.text();
+
+    assert.ok(html.includes('<meta property="og:type" content="video.other" />'));
+    assert.ok(html.includes(`content="${baseUrl}/files/${uploaded.code}.mp4"`));
+    assert.ok(html.includes('<meta property="og:video:type" content="video/mp4" />'));
+    assert.ok(html.includes('<meta property="og:video:width" content="1280" />'));
+    assert.ok(html.includes('<meta property="og:video:height" content="720" />'));
+    assert.ok(html.includes('<meta name="twitter:card" content="player" />'));
+    assert.ok(html.includes('<meta name="twitter:player:width" content="1280" />'));
+    assert.ok(html.includes('<meta name="twitter:player:height" content="720" />'));
+    assert.ok(html.includes('<meta name="twitter:player:stream:content_type" content="video/mp4" />'));
+  });
+
+  it('supports byte range requests, HEAD checks, and CORS for direct video streaming', async () => {
+    const mp4Header = Buffer.from('000000186674797069736f6d0000020069736f6d6d703432', 'hex');
+    const mp4Body = Buffer.alloc(1000, 0x42);
+    const mp4Buffer = Buffer.concat([mp4Header, mp4Body]);
+    const upRes = await uploadMultipartFile({
+      filename: 'sample-video.mp4',
+      contentType: 'application/octet-stream',
+      buffer: mp4Buffer
+    });
+    assert.equal(upRes.status, 201);
+    const uploaded = await upRes.json();
+    assert.equal(uploaded.mimeType, 'video/mp4');
+    assert.equal(uploaded.previewCategory, 'video');
+
+    const optionsRes = await fetch(`${baseUrl}/files/${uploaded.code}.mp4`, {
+      method: 'OPTIONS'
+    });
+    assert.equal(optionsRes.status, 204);
+    assert.equal(optionsRes.headers.get('access-control-allow-origin'), '*');
+
+    const headRes = await fetch(`${baseUrl}/files/${uploaded.code}.mp4`, {
+      method: 'HEAD'
+    });
+    assert.equal(headRes.status, 200);
+    assert.equal(headRes.headers.get('accept-ranges'), 'bytes');
+    assert.equal(headRes.headers.get('content-type'), 'video/mp4');
+    assert.equal(headRes.headers.get('access-control-allow-origin'), '*');
+    assert.ok(headRes.headers.get('content-disposition')?.includes('inline'));
+
+    const rangeRes = await fetch(`${baseUrl}/files/${uploaded.code}.mp4`, {
+      headers: { Range: 'bytes=0-15' }
+    });
+    assert.equal(rangeRes.status, 206);
+    assert.equal(rangeRes.headers.get('accept-ranges'), 'bytes');
+    assert.equal(rangeRes.headers.get('content-type'), 'video/mp4');
+    assert.match(rangeRes.headers.get('content-range') || '', /^bytes 0-15\/\d+$/);
+    const chunk = await rangeRes.arrayBuffer();
+    assert.equal(chunk.byteLength, 16);
+  });
 });
