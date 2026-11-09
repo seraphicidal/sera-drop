@@ -150,6 +150,7 @@ const VALID_REPORT_CATEGORIES = new Set([
   'copyright',
   'malware',
   'illegal_content',
+  'csam',
   'other'
 ]);
 
@@ -1824,7 +1825,7 @@ app.post('/api/report', reportRateLimiter, (req, res) => {
     let mitigated = false;
     const resolvedCode = extractCodeFromTarget(targetUrl, targetCode);
     const isAdmin = hasValidAdminAuth(req);
-    if (isAdmin && resolvedCode && ['copyright', 'malware', 'illegal_content'].includes(category)) {
+    if (isAdmin && resolvedCode && ['copyright', 'malware', 'illegal_content', 'csam'].includes(category)) {
       const db = loadDatabase();
       const record = getRecordByCode(db, resolvedCode);
       if (record) {
