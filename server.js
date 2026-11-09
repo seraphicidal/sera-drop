@@ -1995,6 +1995,7 @@ app.get('/api/status', (req, res) => {
     Boolean(process.env.DATA_DIR && !process.env.DATA_DIR.startsWith(__dirname));
   const rawIp = getClientIp(req);
   const effectiveIpHash = ['127.0.0.1', '::1', 'unknown'].includes(rawIp) ? null : hashClientIp(req);
+  const isAdmin = hasValidAdminAuth(req);
   res.json({
     publicUrl: publicBaseUrl,
     cloudflareUrl,
@@ -2006,9 +2007,9 @@ app.get('/api/status', (req, res) => {
     clientStorageQuotaBytes: getClientStorageQuota(),
     totalFiles: Object.keys(db).length,
     totalAlbums: Object.keys(albums).length,
-    storageRoot: defaultStorageRoot,
-    dataDir: DATA_DIR,
-    uploadsDir: UPLOADS_DIR,
+    storageRoot: isAdmin ? defaultStorageRoot : null,
+    dataDir: isAdmin ? DATA_DIR : null,
+    uploadsDir: isAdmin ? UPLOADS_DIR : null,
     isPersistentDisk
   });
 });

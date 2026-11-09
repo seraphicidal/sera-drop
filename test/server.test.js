@@ -443,13 +443,25 @@ describe('sera-drop Security & Legal Compliance Suite', () => {
   });
 
   it('exposes storage configuration and directory locations in /api/status', async () => {
-    const res = await fetch(`${baseUrl}/api/status`);
-    assert.equal(res.status, 200);
-    const data = await res.json();
-    assert.ok(typeof data.storageRoot === 'string');
-    assert.ok(typeof data.dataDir === 'string');
-    assert.ok(typeof data.uploadsDir === 'string');
-    assert.ok(typeof data.isPersistentDisk === 'boolean');
+    const unauthRes = await fetch(`${baseUrl}/api/status`);
+    assert.equal(unauthRes.status, 200);
+    const unauthData = await unauthRes.json();
+    assert.equal(unauthData.storageRoot, null);
+    assert.equal(unauthData.dataDir, null);
+    assert.equal(unauthData.uploadsDir, null);
+    assert.ok(typeof unauthData.isPersistentDisk === 'boolean');
+
+    const adminRes = await fetch(`${baseUrl}/api/status`, {
+      headers: {
+        Authorization: `Bearer ${process.env.ADMIN_TOKEN}`
+      }
+    });
+    assert.equal(adminRes.status, 200);
+    const adminData = await adminRes.json();
+    assert.ok(typeof adminData.storageRoot === 'string');
+    assert.ok(typeof adminData.dataDir === 'string');
+    assert.ok(typeof adminData.uploadsDir === 'string');
+    assert.ok(typeof adminData.isPersistentDisk === 'boolean');
   });
 
   it('transparently reverse proxies requests when UPSTREAM_URL is configured', async () => {
