@@ -384,19 +384,19 @@ function createRateLimiter({ windowMs, maxRequests, message }) {
 
 const uploadRateLimiter = createRateLimiter({
   windowMs: 10 * 60 * 1000,
-  maxRequests: 40,
+  maxRequests: process.env.NODE_ENV === 'test' ? 2000 : 40,
   message: 'Upload rate limit exceeded. Please wait a few minutes.'
 });
 
 const lookupRateLimiter = createRateLimiter({
   windowMs: 60 * 1000,
-  maxRequests: 180,
+  maxRequests: process.env.NODE_ENV === 'test' ? 5000 : 180,
   message: 'Too many requests. Please slow down.'
 });
 
 const reportRateLimiter = createRateLimiter({
   windowMs: 10 * 60 * 1000,
-  maxRequests: 20,
+  maxRequests: process.env.NODE_ENV === 'test' ? 1000 : 20,
   message: 'Too many abuse reports submitted. Please try again later.'
 });
 
@@ -2068,7 +2068,10 @@ app.post(
       const ttl = String(req.body?.ttl || 'permanent').trim();
       const codeLength = parseInt(req.body?.codeLength || '8', 10);
       const requireSignedUrl =
-        req.body?.requireSignedUrl === 'true' || req.body?.requireSignedUrl === true;
+        req.body?.requireSignedUrl === 'true' ||
+        req.body?.requireSignedUrl === '1' ||
+        req.body?.requireSignedUrl === true ||
+        req.body?.requireSignedUrl === 1;
       const userhash = String(req.body?.userhash || '').trim() || null;
 
       const rawIp = getClientIp(req);
@@ -2109,7 +2112,10 @@ app.post('/api/url-upload', uploadRateLimiter, requireCsrfHeader, preUploadGuard
     const ttl = String(req.body?.ttl || 'permanent').trim();
     const codeLength = parseInt(req.body?.codeLength || '8', 10);
     const requireSignedUrl =
-      req.body?.requireSignedUrl === 'true' || req.body?.requireSignedUrl === true;
+      req.body?.requireSignedUrl === 'true' ||
+      req.body?.requireSignedUrl === '1' ||
+      req.body?.requireSignedUrl === true ||
+      req.body?.requireSignedUrl === 1;
     const userhash = String(req.body?.userhash || '').trim() || null;
 
     const rawIp = getClientIp(req);
@@ -2137,18 +2143,21 @@ app.post('/api/url-upload', uploadRateLimiter, requireCsrfHeader, preUploadGuard
   }
 });
 
-const catboxUploadMiddleware = multer({
-  storage,
-  limits: { fileSize: MAX_FILE_SIZE_BYTES, files: 1 }
-}).single('fileToUpload');
-
-app.post('/user/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
+function csrfCrossSiteGuard(req, res, next) {
   const secFetchSite = req.headers['sec-fetch-site'];
   const origin = req.headers.origin;
   if (secFetchSite === 'cross-site' && origin) {
     return res.status(403).type('text/plain').send('Cross-site requests not allowed.');
   }
+  next();
+}
 
+const catboxUploadMiddleware = multer({
+  storage,
+  limits: { fileSize: MAX_FILE_SIZE_BYTES, files: 1 }
+}).single('fileToUpload');
+
+app.post('/user/api.php', csrfCrossSiteGuard, uploadRateLimiter, preUploadGuard, (req, res) => {
   catboxUploadMiddleware(req, res, async (multerErr) => {
     if (multerErr) {
       return res.status(413).type('text/plain').send(multerErr.message);
@@ -2335,13 +2344,7 @@ app.post('/user/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
   });
 });
 
-app.post('/resources/internals/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
-  const secFetchSite = req.headers['sec-fetch-site'];
-  const origin = req.headers.origin;
-  if (secFetchSite === 'cross-site' && origin) {
-    return res.status(403).type('text/plain').send('Cross-site requests not allowed.');
-  }
-
+app.post('/resources/internals/api.php', csrfCrossSiteGuard, uploadRateLimiter, preUploadGuard, (req, res) => {
   catboxUploadMiddleware(req, res, async (multerErr) => {
     if (multerErr) {
       return res.status(413).type('text/plain').send(multerErr.message);
