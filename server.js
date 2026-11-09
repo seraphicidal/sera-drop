@@ -155,6 +155,7 @@ const VALID_REPORT_CATEGORIES = new Set([
 ]);
 
 let activeUploads = 0;
+let activeUploadBytes = 0;
 let cloudflareUrl = null;
 let publicBaseUrl = process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || null;
 
@@ -852,8 +853,8 @@ function getTotalStorageUsed(db) {
   return total;
 }
 
-function getClientStorageUsed(db, clientIdHash, customClientHash = null) {
-  if (!clientIdHash && !customClientHash) return 0;
+function getClientStorageUsed(db, clientIdHash, customClientHash = null, ipHash = null) {
+  if (!clientIdHash && !customClientHash && !ipHash) return 0;
   const seenStoredNames = new Set();
   let total = 0;
   for (const r of Object.values(db)) {
@@ -862,7 +863,8 @@ function getClientStorageUsed(db, clientIdHash, customClientHash = null) {
     const matchCustom = Boolean(
       customClientHash && (r.userhash === customClientHash || r.clientIdHash === customClientHash)
     );
-    if (matchClient || matchCustom) {
+    const matchIp = Boolean(ipHash && r.ipHash === ipHash);
+    if (matchClient || matchCustom || matchIp) {
       if (!seenStoredNames.has(r.storedName)) {
         seenStoredNames.add(r.storedName);
         total += Number(r.size) || 0;
@@ -1047,19 +1049,22 @@ function preUploadGuard(req, res, next) {
     return res.status(429).json({ error: 'Server is busy processing other uploads. Please try again shortly.' });
   }
 
-  const declaredLength = parseInt(req.headers['content-length'] || '0', 10);
+  const declaredLength = Math.max(0, parseInt(req.headers['content-length'] || '0', 10));
   if (declaredLength > MAX_FILE_SIZE_BYTES + 1024 * 1024) {
     return res.status(413).json({ error: 'File exceeds the 500 MB limit.' });
   }
 
   const db = loadDatabase();
-  if (getTotalStorageUsed(db) + Math.max(0, declaredLength) > MAX_TOTAL_STORAGE_BYTES) {
+  const rawIp = getClientIp(req);
+  const effectiveIpHash = ['127.0.0.1', '::1', 'unknown'].includes(rawIp) ? null : hashClientIp(req);
+
+  if (getTotalStorageUsed(db) + activeUploadBytes + declaredLength > MAX_TOTAL_STORAGE_BYTES) {
     return res.status(507).json({ error: 'Server storage quota reached.' });
   }
 
   const clientQuota = getClientStorageQuota();
-  const clientUsed = getClientStorageUsed(db, req.clientIdHash, req.customClientHash);
-  if (clientUsed + Math.max(0, declaredLength) > clientQuota) {
+  const clientUsed = getClientStorageUsed(db, req.clientIdHash, req.customClientHash, effectiveIpHash);
+  if (clientUsed + activeUploadBytes + declaredLength > clientQuota) {
     if (req.path.includes('.php')) {
       return res.status(507).type('text/plain').send('Client storage quota reached.');
     }
@@ -1069,11 +1074,13 @@ function preUploadGuard(req, res, next) {
   }
 
   activeUploads += 1;
+  activeUploadBytes += declaredLength;
   let decremented = false;
   const decrement = () => {
     if (!decremented) {
       decremented = true;
       activeUploads = Math.max(0, activeUploads - 1);
+      activeUploadBytes = Math.max(0, activeUploadBytes - declaredLength);
     }
   };
   res.on('finish', decrement);
@@ -1175,6 +1182,7 @@ async function registerUploadedFile({
   requireSignedUrl = false,
   userhash = null,
   clientIdHash = null,
+  ipHash = null,
   lowercaseCode = false
 }) {
   const cleanName =
@@ -1248,7 +1256,7 @@ async function registerUploadedFile({
   }
 
   const clientQuota = getClientStorageQuota();
-  const clientUsed = getClientStorageUsed(db, clientIdHash, userhash ? hashToken(userhash) : null);
+  const clientUsed = getClientStorageUsed(db, clientIdHash, userhash ? hashToken(userhash) : null, ipHash);
   if (!deduplicated && clientUsed + size > clientQuota) {
     safeUnlink(tempFilePath);
     const err = new Error(`Client storage quota of ${formatBytes(clientQuota)} reached`);
@@ -1285,6 +1293,7 @@ async function registerUploadedFile({
     requireSignedUrl: Boolean(requireSignedUrl),
     userhash: userhash ? hashToken(userhash) : null,
     clientIdHash: clientIdHash || null,
+    ipHash: ipHash || null,
     createdAt: new Date().toISOString(),
     downloads: 0,
     uploadedFrom: 'public',
@@ -1980,6 +1989,8 @@ app.get('/api/status', (req, res) => {
   const isPersistentDisk =
     fs.existsSync('/var/data') ||
     Boolean(process.env.DATA_DIR && !process.env.DATA_DIR.startsWith(__dirname));
+  const rawIp = getClientIp(req);
+  const effectiveIpHash = ['127.0.0.1', '::1', 'unknown'].includes(rawIp) ? null : hashClientIp(req);
   res.json({
     publicUrl: publicBaseUrl,
     cloudflareUrl,
@@ -1987,7 +1998,7 @@ app.get('/api/status', (req, res) => {
     localUrl: `http://localhost:${PORT}`,
     storageUsedBytes: getTotalStorageUsed(db),
     storageQuotaBytes: MAX_TOTAL_STORAGE_BYTES,
-    clientStorageUsedBytes: getClientStorageUsed(db, req.clientIdHash, req.customClientHash),
+    clientStorageUsedBytes: getClientStorageUsed(db, req.clientIdHash, req.customClientHash, effectiveIpHash),
     clientStorageQuotaBytes: getClientStorageQuota(),
     totalFiles: Object.keys(db).length,
     totalAlbums: Object.keys(albums).length,
@@ -2037,6 +2048,8 @@ app.post(
         req.body?.requireSignedUrl === 'true' || req.body?.requireSignedUrl === true;
       const userhash = String(req.body?.userhash || '').trim() || null;
 
+      const rawIp = getClientIp(req);
+      const effectiveIpHash = ['127.0.0.1', '::1', 'unknown'].includes(rawIp) ? null : hashClientIp(req);
       const { record, deleteToken } = await registerUploadedFile({
         tempFilePath: req.file.path,
         rawOriginalName,
@@ -2046,7 +2059,8 @@ app.post(
         codeLength,
         requireSignedUrl,
         userhash,
-        clientIdHash: req.clientIdHash
+        clientIdHash: req.clientIdHash,
+        ipHash: effectiveIpHash
       });
 
       const payload = await buildFileResponse(req, record);
@@ -2075,6 +2089,8 @@ app.post('/api/url-upload', uploadRateLimiter, requireCsrfHeader, preUploadGuard
       req.body?.requireSignedUrl === 'true' || req.body?.requireSignedUrl === true;
     const userhash = String(req.body?.userhash || '').trim() || null;
 
+    const rawIp = getClientIp(req);
+    const effectiveIpHash = ['127.0.0.1', '::1', 'unknown'].includes(rawIp) ? null : hashClientIp(req);
     const fetched = await fetchRemoteUrlToTempFile(targetUrl);
     const { record, deleteToken } = await registerUploadedFile({
       tempFilePath: fetched.tempFilePath,
@@ -2085,7 +2101,8 @@ app.post('/api/url-upload', uploadRateLimiter, requireCsrfHeader, preUploadGuard
       codeLength,
       requireSignedUrl,
       userhash,
-      clientIdHash: req.clientIdHash
+      clientIdHash: req.clientIdHash,
+      ipHash: effectiveIpHash
     });
 
     const payload = await buildFileResponse(req, record);
@@ -2127,6 +2144,8 @@ app.post('/user/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
         if (!req.file) {
           return res.status(400).type('text/plain').send('No fileToUpload provided.');
         }
+        const rawIp = getClientIp(req);
+        const effectiveIpHash = ['127.0.0.1', '::1', 'unknown'].includes(rawIp) ? null : hashClientIp(req);
         const rawOriginalName = decodeOriginalName(req.file.originalname);
         const { record } = await registerUploadedFile({
           tempFilePath: req.file.path,
@@ -2137,7 +2156,8 @@ app.post('/user/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
           codeLength: 6,
           lowercaseCode: true,
           userhash,
-          clientIdHash: req.clientIdHash
+          clientIdHash: req.clientIdHash,
+          ipHash: effectiveIpHash
         });
         const ext = getSafeExtension(record.originalName);
         return res.status(200).type('text/plain').send(`${baseUrl}/files/${record.code}${ext}`);
@@ -2148,6 +2168,8 @@ app.post('/user/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
         if (!targetUrl) {
           return res.status(412).type('text/plain').send('No url provided.');
         }
+        const rawIp = getClientIp(req);
+        const effectiveIpHash = ['127.0.0.1', '::1', 'unknown'].includes(rawIp) ? null : hashClientIp(req);
         const fetched = await fetchRemoteUrlToTempFile(targetUrl);
         const { record } = await registerUploadedFile({
           tempFilePath: fetched.tempFilePath,
@@ -2158,7 +2180,8 @@ app.post('/user/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
           codeLength: 6,
           lowercaseCode: true,
           userhash,
-          clientIdHash: req.clientIdHash
+          clientIdHash: req.clientIdHash,
+          ipHash: effectiveIpHash
         });
         const ext = getSafeExtension(record.originalName);
         return res.status(200).type('text/plain').send(`${baseUrl}/files/${record.code}${ext}`);
@@ -2290,6 +2313,12 @@ app.post('/user/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
 });
 
 app.post('/resources/internals/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
+  const secFetchSite = req.headers['sec-fetch-site'];
+  const origin = req.headers.origin;
+  if (secFetchSite === 'cross-site' && origin) {
+    return res.status(403).type('text/plain').send('Cross-site requests not allowed.');
+  }
+
   catboxUploadMiddleware(req, res, async (multerErr) => {
     if (multerErr) {
       return res.status(413).type('text/plain').send(multerErr.message);
@@ -2307,6 +2336,8 @@ app.post('/resources/internals/api.php', uploadRateLimiter, preUploadGuard, (req
       }
       const fileNameLength = parseInt(req.body?.fileNameLength || '6', 10) === 16 ? 16 : 6;
       const rawOriginalName = decodeOriginalName(req.file.originalname);
+      const rawIp = getClientIp(req);
+      const effectiveIpHash = ['127.0.0.1', '::1', 'unknown'].includes(rawIp) ? null : hashClientIp(req);
 
       const { record } = await registerUploadedFile({
         tempFilePath: req.file.path,
@@ -2316,7 +2347,8 @@ app.post('/resources/internals/api.php', uploadRateLimiter, preUploadGuard, (req
         ttl: timeKey,
         codeLength: fileNameLength,
         lowercaseCode: true,
-        clientIdHash: req.clientIdHash
+        clientIdHash: req.clientIdHash,
+        ipHash: effectiveIpHash
       });
       const ext = getSafeExtension(record.originalName);
       const baseUrl = resolveBaseUrl(req);
