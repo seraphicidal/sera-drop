@@ -1,3 +1,4 @@
+const crypto = require('node:crypto');
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -13,8 +14,8 @@ const testDataDir = path.join(tmpRoot, 'data');
 process.env.NODE_ENV = 'test';
 process.env.UPLOADS_DIR = testUploadsDir;
 process.env.DATA_DIR = testDataDir;
-process.env.ADMIN_TOKEN = 'test-e2e-admin-token-999';
-process.env.SERA_DROP_SECRET = 'test-e2e-secret-key-12345678901234567890';
+process.env.ADMIN_TOKEN = crypto.randomBytes(16).toString('hex');
+process.env.SERA_DROP_SECRET = crypto.randomBytes(32).toString('hex');
 process.env.DISABLE_TUNNEL = 'true';
 
 const { app } = require('../server.js');
