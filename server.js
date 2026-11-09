@@ -567,15 +567,17 @@ function loadDatabase() {
         }
       } catch {}
     }
-    if (!parsed) {
-      parsed = memoryDbCache ? { ...memoryDbCache } : {};
+    if (!loadedFromDisk) {
+      if (!parsed) {
+        parsed = memoryDbCache ? { ...memoryDbCache } : {};
+      }
+      parsed = recoverDatabaseFromSidecars(parsed);
+      syncMissingSidecars(parsed);
+      if (Object.keys(parsed).length > 0) {
+        saveDatabase(parsed);
+      }
     }
-    parsed = recoverDatabaseFromSidecars(parsed);
-    syncMissingSidecars(parsed);
     memoryDbCache = parsed;
-    if (!loadedFromDisk && Object.keys(parsed).length > 0) {
-      saveDatabase(parsed);
-    }
     return parsed;
   } catch {
     if (memoryDbCache !== null) {
