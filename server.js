@@ -279,6 +279,9 @@ app.use((req, res, next) => {
     'Content-Security-Policy',
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
   );
+  if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
+    res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
+  }
   next();
 });
 
@@ -2529,6 +2532,7 @@ app.get('/api/files/:code', lookupRateLimiter, async (req, res) => {
     const db = loadDatabase();
     const record = getRecordByCode(db, req.params.code);
     if (!record) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
       return res.status(404).json({ error: 'Shared file not found or has expired' });
     }
 
@@ -2543,14 +2547,22 @@ app.get('/api/files/:code', lookupRateLimiter, async (req, res) => {
         verifySecureLink(`/s/${record.code}`, req.query.sig, req.query.expires).ok ||
         verifySecureLink(req.path, req.query.sig, req.query.expires).ok;
       if (!sigOk && !hasOwnerToken && !hasValidAdminAuth(req)) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         return res.status(403).json({ error: 'Valid signature or authorization required for signed file.' });
       }
     }
 
     const filePath = path.join(UPLOADS_DIR, path.basename(record.storedName));
     if (!fs.existsSync(filePath)) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
       return res.status(404).json({ error: 'File no longer exists on server' });
     }
+
+    const isEphemeral = Boolean(record.requireSignedUrl || record.expiresAt || record.ttl !== 'permanent');
+    res.setHeader(
+      'Cache-Control',
+      isEphemeral ? 'private, no-cache, no-store, must-revalidate' : 'public, max-age=60'
+    );
 
     const payload = await buildFileResponse(req, record);
     res.json(payload);
@@ -2654,15 +2666,22 @@ app.head(['/raw/:code', '/raw/:code.:ext', '/files/:codeWithExt', '/f/:code'], l
   const db = loadDatabase();
   const record = getRecordByCode(db, rawParam);
   if (!record) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     return res.status(404).end();
   }
   if (record.requireSignedUrl) {
     const sigParam = req.query.sig || req.query.md5;
     const check = verifySecureLink(req.path, sigParam, req.query.expires);
     if (!check.ok) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
       return res.status(403).end();
     }
   }
+  const isEphemeral = Boolean(record.requireSignedUrl || record.expiresAt || record.ttl !== 'permanent');
+  res.setHeader(
+    'Cache-Control',
+    isEphemeral ? 'private, no-cache, no-store, must-revalidate' : 'public, max-age=86400, immutable'
+  );
   const delivery = resolveRawMediaDelivery(record);
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -2683,6 +2702,7 @@ function serveRawMedia(req, res, rawCodeParam) {
     const db = loadDatabase();
     const record = getRecordByCode(db, rawCodeParam);
     if (!record) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
       return res.status(404).send('File not found or expired');
     }
 
@@ -2690,13 +2710,24 @@ function serveRawMedia(req, res, rawCodeParam) {
       const sigParam = req.query.sig || req.query.md5;
       const check = verifySecureLink(req.path, sigParam, req.query.expires);
       if (!check.ok) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         return res.status(403).send(`403 Forbidden (${check.reason})`);
       }
     }
 
     const filePath = path.join(UPLOADS_DIR, path.basename(record.storedName));
     if (!fs.existsSync(filePath)) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
       return res.status(404).send('File missing from disk');
+    }
+
+    const isEphemeral = Boolean(record.requireSignedUrl || record.expiresAt || record.ttl !== 'permanent');
+    if (isEphemeral) {
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    } else {
+      res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
     }
 
     const delivery = resolveRawMediaDelivery(record);
@@ -2744,6 +2775,7 @@ app.get('/d/:code', lookupRateLimiter, (req, res) => {
     const db = loadDatabase();
     const record = getRecordByCode(db, req.params.code);
     if (!record) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
       return res.status(404).send('File not found or expired');
     }
 
@@ -2751,13 +2783,24 @@ app.get('/d/:code', lookupRateLimiter, (req, res) => {
       const sigParam = req.query.sig || req.query.md5;
       const check = verifySecureLink(req.path, sigParam, req.query.expires);
       if (!check.ok) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         return res.status(403).send(`403 Forbidden (${check.reason})`);
       }
     }
 
     const filePath = path.join(UPLOADS_DIR, path.basename(record.storedName));
     if (!fs.existsSync(filePath)) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
       return res.status(404).send('File missing from disk');
+    }
+
+    const isEphemeral = Boolean(record.requireSignedUrl || record.expiresAt || record.ttl !== 'permanent');
+    if (isEphemeral) {
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    } else {
+      res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
     }
 
     record.downloads = (record.downloads || 0) + 1;
@@ -2766,6 +2809,7 @@ app.get('/d/:code', lookupRateLimiter, (req, res) => {
 
     res.download(filePath, record.originalName);
   } catch {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.status(500).send('Error downloading file');
   }
 });
@@ -2878,6 +2922,11 @@ app.get(['/s/:code', '/s/:code.:ext'], lookupRateLimiter, (req, res) => {
     }
 
     const renderedHtml = rawTemplate.replace('<title>sera.drop</title>', () => metaTags.join('\n  '));
+    const isEphemeral = Boolean(record.requireSignedUrl || record.expiresAt || record.ttl !== 'permanent');
+    res.setHeader(
+      'Cache-Control',
+      isEphemeral ? 'private, no-cache, no-store, must-revalidate' : 'public, max-age=300'
+    );
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.status(200).send(renderedHtml);
   } catch {
@@ -2917,6 +2966,7 @@ app.get('/c/:short', lookupRateLimiter, (req, res) => {
     ];
 
     const renderedHtml = rawTemplate.replace('<title>sera.drop</title>', () => metaTags.join('\n  '));
+    res.setHeader('Cache-Control', 'public, max-age=60');
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.status(200).send(renderedHtml);
   } catch {
