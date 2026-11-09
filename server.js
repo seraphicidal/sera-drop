@@ -17,14 +17,21 @@ const PORT = process.env.PORT || 3000;
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 
+const defaultStorageRoot =
+  fs.existsSync('/var/data') && fs.statSync('/var/data').isDirectory()
+    ? '/var/data'
+    : __dirname;
+
 const UPLOADS_DIR = process.env.UPLOADS_DIR
   ? path.resolve(process.env.UPLOADS_DIR)
-  : path.join(__dirname, 'uploads');
+  : path.join(defaultStorageRoot, 'uploads');
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
-  : path.join(__dirname, 'data');
+  : path.join(defaultStorageRoot, 'data');
 const DB_FILE = path.join(DATA_DIR, 'files.json');
+const DB_BACKUP_FILE = path.join(DATA_DIR, 'files.json.bak');
 const ALBUMS_FILE = path.join(DATA_DIR, 'albums.json');
+const ALBUMS_BACKUP_FILE = path.join(DATA_DIR, 'albums.json.bak');
 const REPORTS_FILE = path.join(DATA_DIR, 'reports.json');
 const BLOCKED_HASHES_FILE = path.join(DATA_DIR, 'blocked_hashes.json');
 const PID_FILE = path.join(DATA_DIR, 'server.pid');
@@ -301,15 +308,138 @@ function sanitizeMapObject(parsed) {
   return clean;
 }
 
+function saveRecordSidecar(record) {
+  if (!record || !record.storedName || !record.code) return;
+  try {
+    const base = path.basename(record.storedName);
+    const metaPath = path.join(UPLOADS_DIR, `${base}.${record.code}.meta.json`);
+    const tmpFile = `${metaPath}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(record, null, 2), 'utf8');
+    fs.renameSync(tmpFile, metaPath);
+  } catch {}
+}
+
+function deleteRecordSidecar(storedName, code) {
+  if (!storedName) return;
+  const base = path.basename(storedName);
+  if (code) {
+    safeUnlink(path.join(UPLOADS_DIR, `${base}.${code}.meta.json`));
+  }
+  safeUnlink(path.join(UPLOADS_DIR, `${base}.meta.json`));
+}
+
+function deleteStoredFile(storedName, code = null) {
+  if (!storedName) return;
+  const base = path.basename(storedName);
+  deleteRecordSidecar(base, code);
+  safeUnlink(path.join(UPLOADS_DIR, base));
+}
+
+function recoverDatabaseFromSidecars(currentDb) {
+  const merged = { ...currentDb };
+  let restored = false;
+  try {
+    if (fs.existsSync(UPLOADS_DIR)) {
+      const diskFiles = fs.readdirSync(UPLOADS_DIR);
+      for (const diskFile of diskFiles) {
+        if (!diskFile.endsWith('.meta.json')) continue;
+        const metaPath = path.join(UPLOADS_DIR, diskFile);
+        try {
+          const raw = fs.readFileSync(metaPath, 'utf8');
+          const rec = JSON.parse(raw);
+          if (rec && rec.code && rec.storedName) {
+            const binPath = path.join(UPLOADS_DIR, path.basename(rec.storedName));
+            if (fs.existsSync(binPath) && !merged[rec.code]) {
+              merged[rec.code] = rec;
+              restored = true;
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+  if (restored) {
+    try {
+      const tmpFile = `${DB_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+      fs.writeFileSync(tmpFile, JSON.stringify(merged, null, 2), 'utf8');
+      fs.renameSync(tmpFile, DB_FILE);
+      try {
+        fs.copyFileSync(DB_FILE, DB_BACKUP_FILE);
+      } catch {}
+    } catch {}
+  }
+  return merged;
+}
+
+function syncMissingSidecars(db) {
+  for (const rec of Object.values(db)) {
+    if (rec && rec.storedName && rec.code) {
+      const base = path.basename(rec.storedName);
+      const metaPath = path.join(UPLOADS_DIR, `${base}.${rec.code}.meta.json`);
+      if (!fs.existsSync(metaPath)) {
+        saveRecordSidecar(rec);
+      }
+    }
+  }
+}
+
+function findSidecarByCode(code) {
+  if (!code || typeof code !== 'string' || !/^[a-zA-Z0-9]{6,16}$/.test(code)) {
+    return null;
+  }
+  try {
+    if (fs.existsSync(UPLOADS_DIR)) {
+      const diskFiles = fs.readdirSync(UPLOADS_DIR);
+      const targetSuffix = `.${code}.meta.json`;
+      for (const file of diskFiles) {
+        if (file.endsWith(targetSuffix)) {
+          const metaPath = path.join(UPLOADS_DIR, file);
+          const raw = fs.readFileSync(metaPath, 'utf8');
+          const rec = JSON.parse(raw);
+          if (rec && rec.code === code && rec.storedName) {
+            const binPath = path.join(UPLOADS_DIR, path.basename(rec.storedName));
+            if (fs.existsSync(binPath)) {
+              return rec;
+            }
+          }
+        }
+      }
+    }
+  } catch {}
+  return null;
+}
+
 function loadDatabase() {
   try {
-    if (!fs.existsSync(DB_FILE)) {
-      memoryDbCache = {};
-      return {};
+    let parsed = null;
+    let loadedFromDisk = false;
+    if (fs.existsSync(DB_FILE)) {
+      try {
+        const raw = fs.readFileSync(DB_FILE, 'utf8');
+        if (raw.trim()) {
+          parsed = sanitizeMapObject(JSON.parse(raw));
+          loadedFromDisk = true;
+        }
+      } catch {}
     }
-    const raw = fs.readFileSync(DB_FILE, 'utf8');
-    const parsed = sanitizeMapObject(JSON.parse(raw));
+    if ((!parsed || Object.keys(parsed).length === 0) && fs.existsSync(DB_BACKUP_FILE)) {
+      try {
+        const raw = fs.readFileSync(DB_BACKUP_FILE, 'utf8');
+        if (raw.trim()) {
+          parsed = sanitizeMapObject(JSON.parse(raw));
+          loadedFromDisk = true;
+        }
+      } catch {}
+    }
+    if (!parsed) {
+      parsed = memoryDbCache ? { ...memoryDbCache } : {};
+    }
+    parsed = recoverDatabaseFromSidecars(parsed);
+    syncMissingSidecars(parsed);
     memoryDbCache = parsed;
+    if (!loadedFromDisk && Object.keys(parsed).length > 0) {
+      saveDatabase(parsed);
+    }
     return parsed;
   } catch {
     if (memoryDbCache !== null) {
@@ -320,41 +450,46 @@ function loadDatabase() {
 }
 
 function saveDatabase(db) {
-  if (saveDbTimeout) {
-    clearTimeout(saveDbTimeout);
-    saveDbTimeout = null;
-  }
+  if (!db || typeof db !== 'object') return;
   memoryDbCache = db;
-  const tmpFile = `${DB_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-  fs.writeFileSync(tmpFile, JSON.stringify(db, null, 2), 'utf8');
-  fs.renameSync(tmpFile, DB_FILE);
+  try {
+    const tmpFile = `${DB_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(db, null, 2), 'utf8');
+    fs.renameSync(tmpFile, DB_FILE);
+    try {
+      fs.copyFileSync(DB_FILE, DB_BACKUP_FILE);
+    } catch {}
+  } catch {}
 }
 
 function scheduleDatabaseSave(db) {
-  memoryDbCache = db;
-  if (!saveDbTimeout) {
-    saveDbTimeout = setTimeout(() => {
-      saveDbTimeout = null;
-      try {
-        const tmpFile = `${DB_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-        fs.writeFileSync(tmpFile, JSON.stringify(memoryDbCache, null, 2), 'utf8');
-        fs.renameSync(tmpFile, DB_FILE);
-      } catch {}
-    }, 1000);
-    saveDbTimeout.unref();
-  }
+  saveDatabase(db);
 }
 
 let memoryAlbumsCache = null;
 
 function loadAlbums() {
   try {
-    if (!fs.existsSync(ALBUMS_FILE)) {
-      memoryAlbumsCache = {};
-      return {};
+    let parsed = null;
+    if (fs.existsSync(ALBUMS_FILE)) {
+      try {
+        const raw = fs.readFileSync(ALBUMS_FILE, 'utf8');
+        if (raw.trim()) {
+          parsed = sanitizeMapObject(JSON.parse(raw));
+        }
+      } catch {}
     }
-    const raw = fs.readFileSync(ALBUMS_FILE, 'utf8');
-    const parsed = sanitizeMapObject(JSON.parse(raw));
+    if ((!parsed || Object.keys(parsed).length === 0) && fs.existsSync(ALBUMS_BACKUP_FILE)) {
+      try {
+        const raw = fs.readFileSync(ALBUMS_BACKUP_FILE, 'utf8');
+        if (raw.trim()) {
+          parsed = sanitizeMapObject(JSON.parse(raw));
+        }
+      } catch {}
+    }
+    if (!parsed) {
+      parsed = memoryAlbumsCache ? { ...memoryAlbumsCache } : {};
+    }
     memoryAlbumsCache = parsed;
     return parsed;
   } catch {
@@ -366,10 +501,16 @@ function loadAlbums() {
 }
 
 function saveAlbums(albums) {
+  if (!albums || typeof albums !== 'object') return;
   memoryAlbumsCache = albums;
-  const tmpFile = `${ALBUMS_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-  fs.writeFileSync(tmpFile, JSON.stringify(albums, null, 2), 'utf8');
-  fs.renameSync(tmpFile, ALBUMS_FILE);
+  try {
+    const tmpFile = `${ALBUMS_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(albums, null, 2), 'utf8');
+    fs.renameSync(tmpFile, ALBUMS_FILE);
+    try {
+      fs.copyFileSync(ALBUMS_FILE, ALBUMS_BACKUP_FILE);
+    } catch {}
+  } catch {}
 }
 
 function loadReports() {
@@ -440,38 +581,22 @@ function reapExpiredFiles() {
     let changed = false;
 
     for (const [code, rec] of Object.entries(db)) {
-      if (rec && rec.expiresAt && new Date(rec.expiresAt).getTime() <= now) {
-        const storedName = rec.storedName;
-        delete db[code];
-        changed = true;
-        if (storedName && !isStoredFileReferenced(db, storedName, code)) {
-          safeUnlink(path.join(UPLOADS_DIR, path.basename(storedName)));
+      if (rec && rec.expiresAt) {
+        const expireTime = new Date(rec.expiresAt).getTime();
+        if (Number.isFinite(expireTime) && expireTime <= now) {
+          const storedName = rec.storedName;
+          delete db[code];
+          deleteRecordSidecar(storedName, code);
+          changed = true;
+          if (storedName && !isStoredFileReferenced(db, storedName, code)) {
+            safeUnlink(path.join(UPLOADS_DIR, path.basename(storedName)));
+          }
         }
       }
     }
 
     if (changed) {
       saveDatabase(db);
-    }
-
-    if (fs.existsSync(UPLOADS_DIR)) {
-      const referenced = new Set(
-        Object.values(db)
-          .map((r) => r && r.storedName && path.basename(r.storedName))
-          .filter(Boolean)
-      );
-      const diskFiles = fs.readdirSync(UPLOADS_DIR);
-      for (const diskFile of diskFiles) {
-        if (!diskFile.endsWith('.bin')) continue;
-        if (referenced.has(diskFile)) continue;
-        const fullPath = path.join(UPLOADS_DIR, diskFile);
-        try {
-          const stats = fs.statSync(fullPath);
-          if (now - stats.mtimeMs > 10 * 60 * 1000) {
-            safeUnlink(fullPath);
-          }
-        } catch {}
-      }
     }
   } catch (err) {
     console.error('TTL reaper error:', err.message);
@@ -487,17 +612,24 @@ function getRecordByCode(db, rawCode) {
   if (!/^[a-zA-Z0-9]{6,16}$/.test(code)) {
     return null;
   }
-  if (!Object.prototype.hasOwnProperty.call(db, code)) {
-    return null;
-  }
-  const record = db[code];
+  let record = Object.prototype.hasOwnProperty.call(db, code) ? db[code] : null;
   if (!record || typeof record !== 'object' || typeof record.storedName !== 'string') {
-    return null;
+    const recovered = findSidecarByCode(code);
+    if (recovered) {
+      db[code] = recovered;
+      saveDatabase(db);
+      record = recovered;
+    } else {
+      return null;
+    }
   }
 
-  if (record.expiresAt && new Date(record.expiresAt).getTime() <= Date.now()) {
-    reapExpiredFiles();
-    return null;
+  if (record.expiresAt) {
+    const expireTime = new Date(record.expiresAt).getTime();
+    if (Number.isFinite(expireTime) && expireTime <= Date.now()) {
+      reapExpiredFiles();
+      return null;
+    }
   }
   return record;
 }
@@ -983,6 +1115,7 @@ async function registerUploadedFile({
 
   db[code] = record;
   saveDatabase(db);
+  saveRecordSidecar(record);
 
   return { record, deleteToken };
 }
@@ -1516,6 +1649,7 @@ app.post('/api/report', reportRateLimiter, (req, res) => {
         const storedName = record.storedName;
         delete db[record.code];
         saveDatabase(db);
+        deleteRecordSidecar(storedName, record.code);
         if (storedName && !isStoredFileReferenced(db, storedName, record.code)) {
           safeUnlink(path.join(UPLOADS_DIR, path.basename(storedName)));
         }
@@ -1585,6 +1719,7 @@ app.delete('/api/admin/files/:code', requireAdminAuth, (req, res) => {
     const storedName = record.storedName;
     delete db[record.code];
     saveDatabase(db);
+    deleteRecordSidecar(storedName, record.code);
     if (storedName && !isStoredFileReferenced(db, storedName, record.code)) {
       safeUnlink(path.join(UPLOADS_DIR, path.basename(storedName)));
     }
@@ -1615,6 +1750,7 @@ app.post('/api/admin/block-hash', requireAdminAuth, (req, res) => {
       if (rec && rec.sha256 === sha256) {
         const storedName = rec.storedName;
         delete db[code];
+        deleteRecordSidecar(storedName, code);
         removedCount += 1;
         if (storedName && !isStoredFileReferenced(db, storedName, code)) {
           safeUnlink(path.join(UPLOADS_DIR, path.basename(storedName)));
@@ -1646,6 +1782,9 @@ app.get('/api/status', (req, res) => {
   const tunnelDisabled = Boolean(
     process.env.DISABLE_TUNNEL === 'true' || process.env.PUBLIC_URL || process.env.RENDER
   );
+  const isPersistentDisk =
+    fs.existsSync('/var/data') ||
+    Boolean(process.env.DATA_DIR && !process.env.DATA_DIR.startsWith(__dirname));
   res.json({
     publicUrl: publicBaseUrl,
     cloudflareUrl,
@@ -1654,7 +1793,11 @@ app.get('/api/status', (req, res) => {
     storageUsedBytes: getTotalStorageUsed(db),
     storageQuotaBytes: MAX_TOTAL_STORAGE_BYTES,
     totalFiles: Object.keys(db).length,
-    totalAlbums: Object.keys(albums).length
+    totalAlbums: Object.keys(albums).length,
+    storageRoot: defaultStorageRoot,
+    dataDir: DATA_DIR,
+    uploadsDir: UPLOADS_DIR,
+    isPersistentDisk
   });
 });
 
@@ -1840,6 +1983,7 @@ app.post('/user/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
         for (const { code, rec } of targets) {
           const storedName = rec.storedName;
           delete db[code];
+          deleteRecordSidecar(storedName, code);
           if (!isStoredFileReferenced(db, storedName, code)) {
             safeUnlink(path.join(UPLOADS_DIR, path.basename(storedName)));
           }
@@ -2132,6 +2276,7 @@ app.delete('/api/files/:code', lookupRateLimiter, requireCsrfHeader, (req, res) 
     const storedName = record.storedName;
     delete db[record.code];
     saveDatabase(db);
+    deleteRecordSidecar(storedName, record.code);
 
     if (!isStoredFileReferenced(db, storedName, record.code)) {
       safeUnlink(path.join(UPLOADS_DIR, path.basename(storedName)));
@@ -2300,7 +2445,8 @@ app.get('/d/:code', lookupRateLimiter, (req, res) => {
     }
 
     record.downloads = (record.downloads || 0) + 1;
-    scheduleDatabaseSave(db);
+    saveDatabase(db);
+    saveRecordSidecar(record);
 
     res.download(filePath, record.originalName);
   } catch {
@@ -2498,10 +2644,22 @@ async function startPublicTunnel() {
   }
 }
 
+app.use((err, req, res, next) => {
+  if (req.file?.path) {
+    safeUnlink(req.file.path);
+  }
+  if (res.headersSent) {
+    return next(err);
+  }
+  const status = err.statusCode || (err.code === 'LIMIT_FILE_SIZE' ? 413 : 500);
+  res.status(status).json({ error: err.message || 'Internal server error' });
+});
+
 if (require.main === module) {
   try {
     fs.writeFileSync(PID_FILE, String(process.pid), 'utf8');
   } catch {}
+  loadDatabase();
   app.listen(PORT, () => {
     console.log(`sera.drop local server running at http://localhost:${PORT}`);
     startPublicTunnel();

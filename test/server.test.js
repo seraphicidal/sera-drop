@@ -411,4 +411,44 @@ describe('sera-drop Security & Legal Compliance Suite', () => {
     const chunk = await rangeRes.arrayBuffer();
     assert.equal(chunk.byteLength, 16);
   });
+
+  it('preserves permanent files and restores database metadata from sidecars if files.json is removed', async () => {
+    const pngBuffer = Buffer.from(
+      '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a2d0000000049454e44ae426082',
+      'hex'
+    );
+    const upRes = await uploadMultipartFile({
+      filename: 'permanent-image.png',
+      contentType: 'image/png',
+      buffer: pngBuffer,
+      fields: { ttl: 'permanent' }
+    });
+    assert.equal(upRes.status, 201);
+    const uploaded = await upRes.json();
+    assert.equal(uploaded.ttl, 'permanent');
+    assert.equal(uploaded.expiresAt, null);
+
+    const dbPath = path.join(testDataDir, 'files.json');
+    const dbBakPath = path.join(testDataDir, 'files.json.bak');
+    if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+    if (fs.existsSync(dbBakPath)) fs.unlinkSync(dbBakPath);
+
+    const getRes = await fetch(`${baseUrl}/files/${uploaded.code}.png`);
+    assert.equal(getRes.status, 200);
+
+    const statusRes = await fetch(`${baseUrl}/api/status`);
+    const statusData = await statusRes.json();
+    assert.ok(statusData.totalFiles >= 1);
+    assert.ok(fs.existsSync(dbPath));
+  });
+
+  it('exposes storage configuration and directory locations in /api/status', async () => {
+    const res = await fetch(`${baseUrl}/api/status`);
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.ok(typeof data.storageRoot === 'string');
+    assert.ok(typeof data.dataDir === 'string');
+    assert.ok(typeof data.uploadsDir === 'string');
+    assert.ok(typeof data.isPersistentDisk === 'boolean');
+  });
 });
