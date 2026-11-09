@@ -1125,9 +1125,11 @@ async function buildFileResponse(req, record, options = {}) {
   let signedExpires = null;
   if (record.requireSignedUrl && !disableSigning) {
     signedExpires = Math.floor(Date.now() / 1000) + SIGNED_URL_TTL_SECONDS;
+    const shareSig = computeSecureLinkSignature(`/s/${record.code}`, signedExpires);
     const rawSig = computeSecureLinkSignature(rawPath, signedExpires);
     const dlSig = computeSecureLinkSignature(downloadPath, signedExpires);
     const dfSig = computeSecureLinkSignature(directFilePath, signedExpires);
+    shortUrl += `?sig=${shareSig}&expires=${signedExpires}`;
     rawPath += `?sig=${rawSig}&expires=${signedExpires}`;
     downloadPath += `?sig=${dlSig}&expires=${signedExpires}`;
     directFilePath += `?sig=${dfSig}&expires=${signedExpires}`;
