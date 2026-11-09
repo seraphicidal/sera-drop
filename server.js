@@ -1103,19 +1103,20 @@ function resolveBaseUrl(req) {
 
 async function buildFileResponse(req, record, options = {}) {
   const includeQr = options.includeQr !== false;
+  const disableSigning = options.disableSigning === true;
   const baseUrl = resolveBaseUrl(req);
   let ext = getSafeExtension(record.originalName);
   const delivery = resolveRawMediaDelivery(record);
   if (!ext && delivery.category === 'video') {
     ext = delivery.contentType === 'video/webm' ? '.webm' : '.mp4';
   }
-  const shortUrl = `${baseUrl}/s/${record.code}`;
+  let shortUrl = `${baseUrl}/s/${record.code}`;
   let rawPath = `/raw/${record.code}`;
   let downloadPath = `/d/${record.code}`;
   let directFilePath = `/files/${record.code}${ext}`;
 
   let signedExpires = null;
-  if (record.requireSignedUrl) {
+  if (record.requireSignedUrl && !disableSigning) {
     signedExpires = Math.floor(Date.now() / 1000) + SIGNED_URL_TTL_SECONDS;
     const rawSig = computeSecureLinkSignature(rawPath, signedExpires);
     const dlSig = computeSecureLinkSignature(downloadPath, signedExpires);
@@ -2205,6 +2206,14 @@ app.post('/user/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
           .filter((c) => /^[a-zA-Z0-9]{6,16}$/.test(c))
           .slice(0, 500);
 
+        const db = loadDatabase();
+        for (const c of filesList) {
+          const rec = getRecordByCode(db, c);
+          if (rec && rec.requireSignedUrl) {
+            return res.status(400).type('text/plain').send('Files requiring signed URLs cannot be added to albums.');
+          }
+        }
+
         const albums = loadAlbums();
         const short = generateShortCode(albums, 6, true);
         albums[short] = {
@@ -2244,6 +2253,16 @@ app.post('/user/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
           .split(/\s+/)
           .map((f) => path.basename(f).split('.')[0])
           .filter((c) => /^[a-zA-Z0-9]{6,16}$/.test(c));
+
+        if (['editalbum', 'addtoalbum'].includes(reqtype)) {
+          const db = loadDatabase();
+          for (const c of incomingFiles) {
+            const rec = getRecordByCode(db, c);
+            if (rec && rec.requireSignedUrl) {
+              return res.status(400).type('text/plain').send('Files requiring signed URLs cannot be added to albums.');
+            }
+          }
+        }
 
         if (reqtype === 'editalbum') {
           album.title = String(req.body?.title || album.title).trim().slice(0, 140);
@@ -2315,9 +2334,19 @@ app.post('/api/albums', uploadRateLimiter, requireCsrfHeader, async (req, res) =
     const description = String(req.body?.description || '').trim().slice(0, 1000);
     const rawFiles = Array.isArray(req.body?.files) ? req.body.files : [];
     const db = loadDatabase();
+    for (const rawCode of rawFiles) {
+      const c = String(rawCode).trim().split('.')[0];
+      const rec = getRecordByCode(db, c);
+      if (rec && rec.requireSignedUrl) {
+        return res.status(400).json({ error: 'Files requiring signed URLs cannot be added to albums' });
+      }
+    }
     const validFiles = rawFiles
       .map((c) => String(c).trim().split('.')[0])
-      .filter((c) => getRecordByCode(db, c))
+      .filter((c) => {
+        const rec = getRecordByCode(db, c);
+        return rec && !rec.requireSignedUrl;
+      })
       .slice(0, 500);
 
     if (!validFiles.length) {
@@ -2370,8 +2399,12 @@ app.get('/api/albums/:short', lookupRateLimiter, async (req, res) => {
       return res.status(404).json({ error: 'Album not found' });
     }
     const db = loadDatabase();
-    const resolvedRecords = album.files.map((c) => getRecordByCode(db, c)).filter(Boolean);
-    const filesPayload = await Promise.all(resolvedRecords.map((r) => buildFileResponse(req, r)));
+    const resolvedRecords = album.files
+      .map((c) => getRecordByCode(db, c))
+      .filter((r) => r && !r.requireSignedUrl);
+    const filesPayload = await Promise.all(
+      resolvedRecords.map((r) => buildFileResponse(req, r, { includeQr: false, disableSigning: true }))
+    );
 
     const baseUrl = resolveBaseUrl(req);
     const albumUrl = `${baseUrl}/c/${album.short}`;
