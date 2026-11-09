@@ -475,4 +475,185 @@ describe('sera-drop Security & Legal Compliance Suite', () => {
       await new Promise((resolve) => mockUpstream.close(resolve));
     }
   });
+
+  it('issues a secure HttpOnly sera_cid cookie and tracks per-client storage usage in /api/status', async () => {
+    const res = await fetch(`${baseUrl}/api/status`);
+    assert.equal(res.status, 200);
+    const setCookie = res.headers.get('set-cookie') || '';
+    assert.ok(setCookie.includes('sera_cid='), `Expected sera_cid cookie in set-cookie: ${setCookie}`);
+    assert.ok(setCookie.includes('HttpOnly'), 'Cookie must be HttpOnly');
+    assert.ok(setCookie.includes('SameSite=Lax'), 'Cookie must be SameSite=Lax');
+    assert.ok(setCookie.includes('Path=/'), 'Cookie path must be /');
+
+    const cookieMatch = setCookie.match(/sera_cid=([a-f0-9]{64})/i);
+    assert.ok(cookieMatch, `Expected 64-character hex client id: ${setCookie}`);
+    const clientCookie = `sera_cid=${cookieMatch[1]}`;
+
+    const textBuf = Buffer.from('Cookie tracked payload data 12345', 'utf8');
+    const form = new FormData();
+    form.append('file', new Blob([textBuf], { type: 'text/plain' }), 'cookie-doc.txt');
+    const upRes = await fetch(`${baseUrl}/api/upload`, {
+      method: 'POST',
+      headers: {
+        'X-Requested-With': 'sera.drop',
+        Cookie: clientCookie
+      },
+      body: form
+    });
+    assert.equal(upRes.status, 201);
+    const upData = await upRes.json();
+    assert.equal(upData.size, textBuf.length);
+
+    const statusWithCookie = await fetch(`${baseUrl}/api/status`, {
+      headers: { Cookie: clientCookie }
+    });
+    assert.equal(statusWithCookie.status, 200);
+    const statusData = await statusWithCookie.json();
+    assert.equal(statusData.clientStorageUsedBytes, textBuf.length);
+    assert.ok(statusData.clientStorageQuotaBytes > 0);
+  });
+
+  it('enforces per-client storage quota and rejects uploads exceeding limit', async () => {
+    const customClientToken = 'a'.repeat(64);
+    const clientCookie = `sera_cid=${customClientToken}`;
+
+    process.env.MAX_CLIENT_STORAGE_BYTES = '1000';
+    try {
+      const payload1 = Buffer.from('Short allowed data', 'utf8');
+      const form1 = new FormData();
+      form1.append('file', new Blob([payload1], { type: 'text/plain' }), 'small.txt');
+      const upRes1 = await fetch(`${baseUrl}/api/upload`, {
+        method: 'POST',
+        headers: {
+          'X-Requested-With': 'sera.drop',
+          Cookie: clientCookie
+        },
+        body: form1
+      });
+      assert.equal(upRes1.status, 201);
+
+      const payload2 = Buffer.alloc(2000, 0x43);
+      const form2 = new FormData();
+      form2.append('file', new Blob([payload2], { type: 'text/plain' }), 'overflow.txt');
+      const upRes2 = await fetch(`${baseUrl}/api/upload`, {
+        method: 'POST',
+        headers: {
+          'X-Requested-With': 'sera.drop',
+          Cookie: clientCookie
+        },
+        body: form2
+      });
+      assert.equal(upRes2.status, 507);
+      const errData = await upRes2.json();
+      assert.match(errData.error, /Client storage quota/);
+    } finally {
+      delete process.env.MAX_CLIENT_STORAGE_BYTES;
+    }
+  });
+
+  it('lists client files via /api/files?mine=1 using cookie identity', async () => {
+    const clientTokenA = 'b'.repeat(64);
+    const cookieA = `sera_cid=${clientTokenA}`;
+    const clientTokenB = 'c'.repeat(64);
+    const cookieB = `sera_cid=${clientTokenB}`;
+
+    const textBuf = Buffer.from('Client A unique content', 'utf8');
+    const form = new FormData();
+    form.append('file', new Blob([textBuf], { type: 'text/plain' }), 'doc-a.txt');
+    const upRes = await fetch(`${baseUrl}/api/upload`, {
+      method: 'POST',
+      headers: {
+        'X-Requested-With': 'sera.drop',
+        Cookie: cookieA
+      },
+      body: form
+    });
+    assert.equal(upRes.status, 201);
+    const upData = await upRes.json();
+
+    const listARes = await fetch(`${baseUrl}/api/files?mine=1`, {
+      headers: { Cookie: cookieA }
+    });
+    assert.equal(listARes.status, 200);
+    const listA = await listARes.json();
+    assert.ok(Array.isArray(listA));
+    assert.ok(listA.some((f) => f.code === upData.code));
+
+    const listBRes = await fetch(`${baseUrl}/api/files?mine=1`, {
+      headers: { Cookie: cookieB }
+    });
+    assert.equal(listBRes.status, 200);
+    const listB = await listBRes.json();
+    assert.ok(Array.isArray(listB));
+    assert.ok(!listB.some((f) => f.code === upData.code));
+  });
+
+  it('allows deletion of files owned by the client via cookie identity without explicit delete token', async () => {
+    const clientToken = 'd'.repeat(64);
+    const cookie = `sera_cid=${clientToken}`;
+
+    const textBuf = Buffer.from('To be deleted by cookie owner', 'utf8');
+    const form = new FormData();
+    form.append('file', new Blob([textBuf], { type: 'text/plain' }), 'deleteme.txt');
+    const upRes = await fetch(`${baseUrl}/api/upload`, {
+      method: 'POST',
+      headers: {
+        'X-Requested-With': 'sera.drop',
+        Cookie: cookie
+      },
+      body: form
+    });
+    assert.equal(upRes.status, 201);
+    const upData = await upRes.json();
+
+    const strangerCookie = `sera_cid=${'e'.repeat(64)}`;
+    const strangerDelRes = await fetch(`${baseUrl}/api/files/${upData.code}`, {
+      method: 'DELETE',
+      headers: {
+        'X-Requested-With': 'sera.drop',
+        Cookie: strangerCookie
+      }
+    });
+    assert.equal(strangerDelRes.status, 401);
+
+    const ownerDelRes = await fetch(`${baseUrl}/api/files/${upData.code}`, {
+      method: 'DELETE',
+      headers: {
+        'X-Requested-With': 'sera.drop',
+        Cookie: cookie
+      }
+    });
+    assert.equal(ownerDelRes.status, 200);
+    const delData = await ownerDelRes.json();
+    assert.equal(delData.success, true);
+
+    const checkRes = await fetch(`${baseUrl}/api/files/${upData.code}`);
+    assert.equal(checkRes.status, 404);
+  });
+
+  it('rejects remote URL uploads targeting non-standard web ports', async () => {
+    const sshRes = await fetch(`${baseUrl}/api/url-upload`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'sera.drop'
+      },
+      body: JSON.stringify({ url: 'http://1.1.1.1:22/payload.bin' })
+    });
+    assert.equal(sshRes.status, 412);
+    const sshData = await sshRes.json();
+    assert.match(sshData.error, /Remote URL port is restricted/);
+
+    const redisRes = await fetch(`${baseUrl}/api/url-upload`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'sera.drop'
+      },
+      body: JSON.stringify({ url: 'http://1.1.1.1:6379/redis' })
+    });
+    assert.equal(redisRes.status, 412);
+    const redisData = await redisRes.json();
+    assert.match(redisData.error, /Remote URL port is restricted/);
+  });
 });

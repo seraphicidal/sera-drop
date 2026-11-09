@@ -702,13 +702,22 @@
   async function loadFiles() {
     try {
       const ownedCodes = Object.keys(getOwnedFilesMap()).reverse();
-      const query = ownedCodes.length ? `?codes=${encodeURIComponent(ownedCodes.slice(0, 100).join(','))}` : '';
-      const res = await fetch(`/api/files${query}`);
+      const codeParam = ownedCodes.length ? `&codes=${encodeURIComponent(ownedCodes.slice(0, 100).join(','))}` : '';
+      const res = await fetch(`/api/files?mine=1${codeParam}`);
       const files = await res.json();
       currentLoadedFiles = Array.isArray(files) ? files : [];
       fileCountLabel.textContent = `${currentLoadedFiles.length}`;
 
       const returnedCodes = new Set(currentLoadedFiles.map((f) => f.code));
+      for (const f of currentLoadedFiles) {
+        if (f.code) {
+          const map = getOwnedFilesMap();
+          if (map[f.code] === undefined) {
+            map[f.code] = '';
+            localStorage.setItem(OWNED_STORAGE_KEY, JSON.stringify(map));
+          }
+        }
+      }
       for (const code of ownedCodes.slice(0, 100)) {
         if (!returnedCodes.has(code)) {
           removeOwnedFileToken(code);
@@ -801,7 +810,12 @@
       const res = await fetch('/api/status');
       const data = await res.json();
       const badge = document.getElementById('publicUrlBadge');
-      if (typeof data.storageUsedBytes === 'number') {
+      if (typeof data.clientStorageUsedBytes === 'number' && typeof data.clientStorageQuotaBytes === 'number') {
+        const clientFormatted = formatBytes(data.clientStorageUsedBytes);
+        const clientQuotaFormatted = formatBytes(data.clientStorageQuotaBytes);
+        storageBadge.innerHTML = `<span>${escapeHtml(clientFormatted)} / ${escapeHtml(clientQuotaFormatted)}</span><span>Max 500 MB/file</span>`;
+        storageBadge.title = `Your disk space: ${clientFormatted} / ${clientQuotaFormatted} (Total server: ${formatBytes(data.storageUsedBytes || 0)} / 5 GB)`;
+      } else if (typeof data.storageUsedBytes === 'number') {
         storageBadge.innerHTML = `<span>${escapeHtml(formatBytes(data.storageUsedBytes))} / 5 GB</span><span>Max 500 MB/file</span>`;
       }
       const isLocalHost =

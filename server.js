@@ -40,6 +40,12 @@ const SECRET_FILE = path.join(DATA_DIR, 'secret.key');
 const MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024;
 const MAX_GIF_SIZE_BYTES = 50 * 1024 * 1024;
 const MAX_TOTAL_STORAGE_BYTES = 5 * 1024 * 1024 * 1024;
+const CLIENT_COOKIE_NAME = 'sera_cid';
+function getClientStorageQuota() {
+  return process.env.MAX_CLIENT_STORAGE_BYTES
+    ? parseInt(process.env.MAX_CLIENT_STORAGE_BYTES, 10)
+    : 2 * 1024 * 1024 * 1024;
+}
 const MAX_CONCURRENT_UPLOADS = 5;
 const SIGNED_URL_TTL_SECONDS = 240;
 
@@ -199,8 +205,15 @@ app.use((req, res, next) => {
   const transport = isHttps ? https : http;
   const targetUrl = new URL(req.url, upstreamTarget);
 
+  const incomingClientIp =
+    (typeof req.headers['cf-connecting-ip'] === 'string' && req.headers['cf-connecting-ip'].trim()) ||
+    (typeof req.headers['x-real-ip'] === 'string' && req.headers['x-real-ip'].trim()) ||
+    (typeof req.headers['x-forwarded-for'] === 'string' && req.headers['x-forwarded-for'].split(',')[0].trim()) ||
+    req.socket.remoteAddress;
+
   const headers = { ...req.headers };
   headers.host = urlObj.host;
+  headers['x-real-ip'] = incomingClientIp;
   headers['x-forwarded-host'] = req.headers.host || '';
   headers['x-forwarded-proto'] = req.protocol || 'https';
   headers['x-forwarded-for'] = req.headers['x-forwarded-for']
@@ -267,9 +280,62 @@ app.use((req, res, next) => {
   next();
 });
 
+function parseCookies(cookieHeader) {
+  const cookies = {};
+  if (!cookieHeader || typeof cookieHeader !== 'string') return cookies;
+  const pairs = cookieHeader.split(';');
+  for (const pair of pairs) {
+    const idx = pair.indexOf('=');
+    if (idx < 0) continue;
+    const key = pair.slice(0, idx).trim();
+    const val = pair.slice(idx + 1).trim();
+    if (key) {
+      cookies[key] = decodeURIComponent(val);
+    }
+  }
+  return cookies;
+}
+
+app.use((req, res, next) => {
+  const cookies = parseCookies(req.headers.cookie);
+  let clientId = cookies[CLIENT_COOKIE_NAME];
+  let isNew = false;
+  if (!clientId || typeof clientId !== 'string' || !/^[a-f0-9]{64}$/i.test(clientId)) {
+    clientId = crypto.randomBytes(32).toString('hex');
+    isNew = true;
+  }
+
+  req.clientId = clientId;
+  req.clientIdHash = hashToken(clientId);
+
+  const customHeader = req.headers['x-client-id'] || req.headers['x-user-hash'];
+  if (typeof customHeader === 'string' && customHeader.trim()) {
+    req.customClientHash = hashToken(customHeader.trim());
+  } else {
+    req.customClientHash = null;
+  }
+
+  if (isNew) {
+    const isHttps =
+      req.protocol === 'https' ||
+      req.headers['x-forwarded-proto'] === 'https' ||
+      process.env.NODE_ENV === 'production';
+    const secureFlag = isHttps ? '; Secure' : '';
+    res.setHeader(
+      'Set-Cookie',
+      `${CLIENT_COOKIE_NAME}=${clientId}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax${secureFlag}`
+    );
+  }
+  next();
+});
+
 function getClientIp(req) {
   if (process.env.TRUST_CF_HEADERS === 'true' && typeof req.headers['cf-connecting-ip'] === 'string') {
     return req.headers['cf-connecting-ip'].trim();
+  }
+  if (typeof req.headers['x-real-ip'] === 'string' && req.headers['x-real-ip'].trim()) {
+    const candidate = req.headers['x-real-ip'].trim();
+    if (net.isIP(candidate)) return candidate;
   }
   return req.ip || req.socket?.remoteAddress || 'unknown';
 }
@@ -783,6 +849,26 @@ function getTotalStorageUsed(db) {
   return total;
 }
 
+function getClientStorageUsed(db, clientIdHash, customClientHash = null) {
+  if (!clientIdHash && !customClientHash) return 0;
+  const seenStoredNames = new Set();
+  let total = 0;
+  for (const r of Object.values(db)) {
+    if (!r || !r.storedName) continue;
+    const matchClient = Boolean(clientIdHash && r.clientIdHash === clientIdHash);
+    const matchCustom = Boolean(
+      customClientHash && (r.userhash === customClientHash || r.clientIdHash === customClientHash)
+    );
+    if (matchClient || matchCustom) {
+      if (!seenStoredNames.has(r.storedName)) {
+        seenStoredNames.add(r.storedName);
+        total += Number(r.size) || 0;
+      }
+    }
+  }
+  return total;
+}
+
 function decodeOriginalName(rawName) {
   if (typeof rawName !== 'string') return 'unnamed';
   if (/[^\x00-\xFF]/.test(rawName)) return rawName;
@@ -968,6 +1054,17 @@ function preUploadGuard(req, res, next) {
     return res.status(507).json({ error: 'Server storage quota reached.' });
   }
 
+  const clientQuota = getClientStorageQuota();
+  const clientUsed = getClientStorageUsed(db, req.clientIdHash, req.customClientHash);
+  if (clientUsed + Math.max(0, declaredLength) > clientQuota) {
+    if (req.path.includes('.php')) {
+      return res.status(507).type('text/plain').send('Client storage quota reached.');
+    }
+    return res.status(507).json({
+      error: `Client storage quota of ${formatBytes(clientQuota)} reached.`
+    });
+  }
+
   activeUploads += 1;
   let decremented = false;
   const decrement = () => {
@@ -1073,6 +1170,7 @@ async function registerUploadedFile({
   codeLength = 8,
   requireSignedUrl = false,
   userhash = null,
+  clientIdHash = null,
   lowercaseCode = false
 }) {
   const cleanName =
@@ -1145,6 +1243,15 @@ async function registerUploadedFile({
     throw err;
   }
 
+  const clientQuota = getClientStorageQuota();
+  const clientUsed = getClientStorageUsed(db, clientIdHash, userhash ? hashToken(userhash) : null);
+  if (!deduplicated && clientUsed + size > clientQuota) {
+    safeUnlink(tempFilePath);
+    const err = new Error(`Client storage quota of ${formatBytes(clientQuota)} reached`);
+    err.statusCode = 507;
+    throw err;
+  }
+
   const normalizedTtl = TTL_PRESETS_MS[ttl] ? ttl : 'permanent';
   const expiresAt = TTL_PRESETS_MS[normalizedTtl]
     ? new Date(Date.now() + TTL_PRESETS_MS[normalizedTtl]).toISOString()
@@ -1173,6 +1280,7 @@ async function registerUploadedFile({
     expiresAt,
     requireSignedUrl: Boolean(requireSignedUrl),
     userhash: userhash ? hashToken(userhash) : null,
+    clientIdHash: clientIdHash || null,
     createdAt: new Date().toISOString(),
     downloads: 0,
     uploadedFrom: 'public',
@@ -1234,17 +1342,22 @@ function parseIpv6Words(addr) {
 }
 
 function isPrivateOrReservedIp(ip) {
-  if (typeof ip !== 'string' || !net.isIP(ip)) return true;
-  const lower = ip.toLowerCase().trim();
-  if (lower === '127.0.0.1' || lower === '0.0.0.0' || lower === '::1' || lower === '::') return true;
+  if (typeof ip !== 'string') return true;
+  let cleanIp = ip.trim().toLowerCase();
+  if (cleanIp.startsWith('[') && cleanIp.endsWith(']')) {
+    cleanIp = cleanIp.slice(1, -1);
+  }
+  if (!net.isIP(cleanIp)) return true;
+  if (cleanIp === '127.0.0.1' || cleanIp === '0.0.0.0' || cleanIp === '::1' || cleanIp === '::') return true;
 
-  if (net.isIPv4(lower)) {
-    const parts = lower.split('.').map(Number);
+  if (net.isIPv4(cleanIp)) {
+    const parts = cleanIp.split('.').map(Number);
     if (parts[0] === 0 || parts[0] === 10 || parts[0] === 127) return true;
     if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true;
     if (parts[0] === 169 && parts[1] === 254) return true;
     if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
     if (parts[0] === 192 && parts[1] === 0 && (parts[2] === 0 || parts[2] === 2)) return true;
+    if (parts[0] === 192 && parts[1] === 88 && parts[2] === 99) return true;
     if (parts[0] === 192 && parts[1] === 168) return true;
     if (parts[0] === 198 && (parts[1] === 18 || parts[1] === 19)) return true;
     if (parts[0] === 198 && parts[1] === 51 && parts[2] === 100) return true;
@@ -1253,7 +1366,7 @@ function isPrivateOrReservedIp(ip) {
     return false;
   }
 
-  const words = parseIpv6Words(lower);
+  const words = parseIpv6Words(cleanIp);
   if (!words) return true;
 
   if (
@@ -1283,7 +1396,11 @@ function isPrivateOrReservedIp(ip) {
 
   if ((words[0] & 0xfe00) === 0xfc00) return true;
   if ((words[0] & 0xffc0) === 0xfe80) return true;
+  if ((words[0] & 0xffc0) === 0xfec0) return true;
   if ((words[0] & 0xff00) === 0xff00) return true;
+  if (words[0] === 0x2001 && words[1] === 0) return true;
+  if (words[0] === 0x2001 && words[1] === 2) return true;
+  if (words[0] === 0x2001 && (words[1] & 0xfff0) === 0x0020) return true;
   if (words[0] === 0x2001 && words[1] === 0x0db8) return true;
   if (words[0] === 0x0100 && words[1] === 0 && words[2] === 0 && words[3] === 0) return true;
   if (words[0] === 0x0064 && words[1] === 0xff9b) {
@@ -1314,6 +1431,14 @@ async function fetchRemoteUrlToTempFile(rawUrl) {
   }
   if (parsed.username || parsed.password) {
     const err = new Error('URLs with embedded credentials are not allowed');
+    err.statusCode = 412;
+    throw err;
+  }
+
+  const ALLOWED_REMOTE_PORTS = new Set([80, 443, 8080, 8443]);
+  const remotePort = parsed.port ? parseInt(parsed.port, 10) : (parsed.protocol === 'https:' ? 443 : 80);
+  if (!ALLOWED_REMOTE_PORTS.has(remotePort)) {
+    const err = new Error('Remote URL port is restricted (only standard web ports allowed)');
     err.statusCode = 412;
     throw err;
   }
@@ -1617,7 +1742,7 @@ app.get('/privacy', (req, res) => {
     <section style="margin-top:1.25rem;">
       <h2>4. Local Storage &amp; Cookie Policy (§ 25 TDDDG)</h2>
       <p>
-        sera.drop does not use tracking, advertising, or third-party analytics cookies, nor does it load external fonts from third-party CDNs. Functional history of your own uploads and delete tokens is stored strictly locally in your browser's <code>localStorage</code> under your control.
+        sera.drop uses a strictly necessary, pseudonymous first-party session cookie (<code>sera_cid</code>) solely to calculate storage usage, enforce fair-use disk quotas, and manage your uploads pursuant to § 25(2) No. 2 TDDDG and Art. 6(1)(b) GDPR. No advertising, analytics, or third-party tracking cookies are used. Upload history and delete tokens are additionally retained in your browser's <code>localStorage</code> under your control.
       </p>
     </section>
     <section style="margin-top:1.25rem;">
@@ -1858,6 +1983,8 @@ app.get('/api/status', (req, res) => {
     localUrl: `http://localhost:${PORT}`,
     storageUsedBytes: getTotalStorageUsed(db),
     storageQuotaBytes: MAX_TOTAL_STORAGE_BYTES,
+    clientStorageUsedBytes: getClientStorageUsed(db, req.clientIdHash, req.customClientHash),
+    clientStorageQuotaBytes: getClientStorageQuota(),
     totalFiles: Object.keys(db).length,
     totalAlbums: Object.keys(albums).length,
     storageRoot: defaultStorageRoot,
@@ -1904,6 +2031,7 @@ app.post(
       const codeLength = parseInt(req.body?.codeLength || '8', 10);
       const requireSignedUrl =
         req.body?.requireSignedUrl === 'true' || req.body?.requireSignedUrl === true;
+      const userhash = String(req.body?.userhash || '').trim() || null;
 
       const { record, deleteToken } = await registerUploadedFile({
         tempFilePath: req.file.path,
@@ -1912,7 +2040,9 @@ app.post(
         size: req.file.size,
         ttl,
         codeLength,
-        requireSignedUrl
+        requireSignedUrl,
+        userhash,
+        clientIdHash: req.clientIdHash
       });
 
       const payload = await buildFileResponse(req, record);
@@ -1939,6 +2069,7 @@ app.post('/api/url-upload', uploadRateLimiter, requireCsrfHeader, preUploadGuard
     const codeLength = parseInt(req.body?.codeLength || '8', 10);
     const requireSignedUrl =
       req.body?.requireSignedUrl === 'true' || req.body?.requireSignedUrl === true;
+    const userhash = String(req.body?.userhash || '').trim() || null;
 
     const fetched = await fetchRemoteUrlToTempFile(targetUrl);
     const { record, deleteToken } = await registerUploadedFile({
@@ -1948,7 +2079,9 @@ app.post('/api/url-upload', uploadRateLimiter, requireCsrfHeader, preUploadGuard
       size: fetched.size,
       ttl,
       codeLength,
-      requireSignedUrl
+      requireSignedUrl,
+      userhash,
+      clientIdHash: req.clientIdHash
     });
 
     const payload = await buildFileResponse(req, record);
@@ -1999,7 +2132,8 @@ app.post('/user/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
           ttl: 'permanent',
           codeLength: 6,
           lowercaseCode: true,
-          userhash
+          userhash,
+          clientIdHash: req.clientIdHash
         });
         const ext = getSafeExtension(record.originalName);
         return res.status(200).type('text/plain').send(`${baseUrl}/files/${record.code}${ext}`);
@@ -2019,7 +2153,8 @@ app.post('/user/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
           ttl: 'permanent',
           codeLength: 6,
           lowercaseCode: true,
-          userhash
+          userhash,
+          clientIdHash: req.clientIdHash
         });
         const ext = getSafeExtension(record.originalName);
         return res.status(200).type('text/plain').send(`${baseUrl}/files/${record.code}${ext}`);
@@ -2075,6 +2210,7 @@ app.post('/user/api.php', uploadRateLimiter, preUploadGuard, (req, res) => {
           description: desc,
           files: filesList,
           userhash: userhash ? hashToken(userhash) : null,
+          clientIdHash: req.clientIdHash || null,
           createdAt: new Date().toISOString()
         };
         saveAlbums(albums);
@@ -2157,7 +2293,8 @@ app.post('/resources/internals/api.php', uploadRateLimiter, preUploadGuard, (req
         size: req.file.size,
         ttl: timeKey,
         codeLength: fileNameLength,
-        lowercaseCode: true
+        lowercaseCode: true,
+        clientIdHash: req.clientIdHash
       });
       const ext = getSafeExtension(record.originalName);
       const baseUrl = resolveBaseUrl(req);
@@ -2194,6 +2331,7 @@ app.post('/api/albums', uploadRateLimiter, requireCsrfHeader, async (req, res) =
       description,
       files: Array.from(new Set(validFiles)),
       userhash: hashToken(deleteToken),
+      clientIdHash: req.clientIdHash || null,
       createdAt: new Date().toISOString()
     };
     saveAlbums(albums);
@@ -2266,7 +2404,36 @@ app.get('/api/files', lookupRateLimiter, async (req, res) => {
         .map((c) => c.trim())
         .filter((c) => /^[a-zA-Z0-9]{6,16}$/.test(c))
         .slice(0, 100);
-      records = requestedCodes.map((c) => getRecordByCode(db, c)).filter(Boolean);
+      const codeSet = new Set(requestedCodes);
+      const byCode = requestedCodes.map((c) => getRecordByCode(db, c)).filter(Boolean);
+      if (req.query.mine === '1' || req.query.mine === 'true') {
+        const byCookie = Object.values(db).filter((r) => {
+          if (!r || codeSet.has(r.code)) return false;
+          if (req.clientIdHash && r.clientIdHash === req.clientIdHash) return true;
+          if (
+            req.customClientHash &&
+            (r.userhash === req.customClientHash || r.clientIdHash === req.customClientHash)
+          ) {
+            return true;
+          }
+          return false;
+        });
+        records = [...byCode, ...byCookie];
+      } else {
+        records = byCode;
+      }
+    } else if (req.query.mine === '1' || req.query.mine === 'true') {
+      records = Object.values(db).filter((r) => {
+        if (!r) return false;
+        if (req.clientIdHash && r.clientIdHash === req.clientIdHash) return true;
+        if (
+          req.customClientHash &&
+          (r.userhash === req.customClientHash || r.clientIdHash === req.customClientHash)
+        ) {
+          return true;
+        }
+        return false;
+      });
     } else {
       if (!hasValidAdminAuth(req)) {
         return res.status(401).json({ error: 'Unauthorized: valid Bearer ADMIN_TOKEN required' });
@@ -2334,8 +2501,18 @@ app.delete('/api/files/:code', lookupRateLimiter, requireCsrfHeader, (req, res) 
         providedToken &&
         safeTimingEqualStrings(hashToken(providedToken), record.deleteTokenHash)
     );
+    const hasCookieOwnership = Boolean(
+      record.clientIdHash &&
+        req.clientIdHash &&
+        safeTimingEqualStrings(record.clientIdHash, req.clientIdHash)
+    );
+    const hasCustomOwnership = Boolean(
+      record.userhash &&
+        req.customClientHash &&
+        safeTimingEqualStrings(record.userhash, req.customClientHash)
+    );
 
-    if (!hasOwnerToken && !hasValidAdminAuth(req)) {
+    if (!hasOwnerToken && !hasCookieOwnership && !hasCustomOwnership && !hasValidAdminAuth(req)) {
       return res.status(401).json({ error: 'Unauthorized: valid Bearer ADMIN_TOKEN required' });
     }
 
@@ -2727,4 +2904,10 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, computeSecureLinkSignature, verifySecureLink };
+module.exports = {
+  app,
+  computeSecureLinkSignature,
+  verifySecureLink,
+  CLIENT_COOKIE_NAME,
+  getClientStorageQuota
+};
