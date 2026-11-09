@@ -9,6 +9,7 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sera-drop-test-'));
 const testUploadsDir = path.join(tmpRoot, 'uploads');
 const testDataDir = path.join(tmpRoot, 'data');
 
+process.env.NODE_ENV = 'test';
 process.env.UPLOADS_DIR = testUploadsDir;
 process.env.DATA_DIR = testDataDir;
 process.env.ADMIN_TOKEN = 'test-super-secret-admin-token-999';
@@ -667,5 +668,335 @@ describe('sera-drop Security & Legal Compliance Suite', () => {
     assert.equal(redisRes.status, 412);
     const redisData = await redisRes.json();
     assert.match(redisData.error, /Remote URL port is restricted/);
+  });
+
+  it('parses every report category from index.html and verifies acceptance in /api/report', async () => {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+    const selectMatch = html.match(/<select id="reportCategory"[^>]*>([\s\S]*?)<\/select>/);
+    assert.ok(selectMatch, 'Expected #reportCategory select in index.html');
+    const options = Array.from(selectMatch[1].matchAll(/<option value="([^"]+)"/g)).map((m) => m[1]);
+    assert.ok(options.length >= 4);
+
+    const testFile = await uploadMultipartFile({
+      filename: 'report-target.txt',
+      contentType: 'text/plain',
+      buffer: Buffer.from('file for report testing', 'utf8')
+    });
+    const fileData = await testFile.json();
+
+    for (const cat of options) {
+      const res = await fetch(`${baseUrl}/api/report`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'sera.drop'
+        },
+        body: JSON.stringify({
+          targetUrl: fileData.shortUrl,
+          category: cat,
+          explanation: `Testing report category: ${cat} with sufficient text length.`,
+          notifierName: 'Compliance Test Inspector',
+          notifierEmail: 'inspector@test.gov',
+          goodFaithConfirmed: true
+        })
+      });
+      assert.equal(res.status, 201, `Failed to submit report for category: ${cat}`);
+      const body = await res.json();
+      assert.ok(body.reportId);
+    }
+  });
+
+  it('rejects adding signed files to shared albums and omits signature minting in album resolution (FINDING-01)', async () => {
+    const signedUpRes = await uploadMultipartFile({
+      filename: 'confidential.txt',
+      contentType: 'text/plain',
+      buffer: Buffer.from('top-secret-content', 'utf8'),
+      fields: { requireSignedUrl: '1' }
+    });
+    assert.equal(signedUpRes.status, 201);
+    const signedData = await signedUpRes.json();
+    assert.equal(signedData.requireSignedUrl, true);
+
+    const normalUpRes = await uploadMultipartFile({
+      filename: 'public-doc.txt',
+      contentType: 'text/plain',
+      buffer: Buffer.from('public-content', 'utf8')
+    });
+    assert.equal(normalUpRes.status, 201);
+    const normalData = await normalUpRes.json();
+
+    const postAlbumRes = await fetch(`${baseUrl}/api/albums`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'sera.drop'
+      },
+      body: JSON.stringify({
+        title: 'Secret Album',
+        files: [signedData.code, normalData.code]
+      })
+    });
+    assert.equal(postAlbumRes.status, 400);
+    const postAlbumBody = await postAlbumRes.json();
+    assert.equal(postAlbumBody.error, 'Files requiring signed URLs cannot be added to albums');
+
+    const catboxAlbumForm = new FormData();
+    catboxAlbumForm.append('reqtype', 'createalbum');
+    catboxAlbumForm.append('files', `${signedData.code} ${normalData.code}`);
+    const catboxAlbumRes = await fetch(`${baseUrl}/user/api.php`, {
+      method: 'POST',
+      body: catboxAlbumForm
+    });
+    assert.equal(catboxAlbumRes.status, 400);
+    const catboxAlbumText = await catboxAlbumRes.text();
+    assert.equal(catboxAlbumText, 'Files requiring signed URLs cannot be added to albums.');
+
+    const validAlbumForm = new FormData();
+    validAlbumForm.append('reqtype', 'createalbum');
+    validAlbumForm.append('userhash', 'user-test-hash-1234');
+    validAlbumForm.append('files', normalData.code);
+    const validAlbumRes = await fetch(`${baseUrl}/user/api.php`, {
+      method: 'POST',
+      body: validAlbumForm
+    });
+    assert.equal(validAlbumRes.status, 200);
+    const albumUrl = await validAlbumRes.text();
+    const albumCode = albumUrl.split('/').pop();
+
+    const editAlbumForm = new FormData();
+    editAlbumForm.append('reqtype', 'editalbum');
+    editAlbumForm.append('userhash', 'user-test-hash-1234');
+    editAlbumForm.append('short', albumCode);
+    editAlbumForm.append('files', `${normalData.code} ${signedData.code}`);
+    const editAlbumRes = await fetch(`${baseUrl}/user/api.php`, {
+      method: 'POST',
+      body: editAlbumForm
+    });
+    assert.equal(editAlbumRes.status, 400);
+
+    const getAlbumRes = await fetch(`${baseUrl}/api/albums/${albumCode}`);
+    assert.equal(getAlbumRes.status, 200);
+    const getAlbumData = await getAlbumRes.json();
+    assert.equal(getAlbumData.files.length, 1);
+    assert.ok(!getAlbumData.files[0].shortUrl.includes('sig='));
+    assert.equal(getAlbumData.files[0].signedExpires, null);
+  });
+
+  it('ignores spoofed X-Real-IP headers in client IP resolution (FINDING-02)', async () => {
+    const resSpoofed = await fetch(`${baseUrl}/api/status`, {
+      headers: {
+        'X-Real-IP': '198.51.100.99'
+      }
+    });
+    assert.equal(resSpoofed.status, 200);
+
+    const resCf = await fetch(`${baseUrl}/api/status`, {
+      headers: {
+        'CF-Connecting-IP': '203.0.113.88'
+      }
+    });
+    assert.equal(resCf.status, 200);
+  });
+
+  it('prevents OpenGraph template pattern replacement injection for files with dollar syntax (FINDING-03)', async () => {
+    const upRes = await uploadMultipartFile({
+      filename: "proof$'injection$&template.txt",
+      contentType: 'text/plain',
+      buffer: Buffer.from('hello dollar syntax', 'utf8')
+    });
+    assert.equal(upRes.status, 201);
+    const upData = await upRes.json();
+
+    const sharePageRes = await fetch(`${baseUrl}/s/${upData.code}`);
+    assert.equal(sharePageRes.status, 200);
+    const html = await sharePageRes.text();
+
+    assert.ok(!html.includes("proof\n</head>"));
+    assert.equal(html.indexOf('<head>'), html.lastIndexOf('<head>'));
+    assert.equal(html.indexOf('<body>'), html.lastIndexOf('<body>'));
+    assert.ok(html.includes('&#39;injection'));
+  });
+
+  it('ensures signed share links include HMAC signature parameters (FINDING-05)', async () => {
+    const upRes = await uploadMultipartFile({
+      filename: 'signed-secret.txt',
+      contentType: 'text/plain',
+      buffer: Buffer.from('content inside signed file', 'utf8'),
+      fields: { requireSignedUrl: '1' }
+    });
+    assert.equal(upRes.status, 201);
+    const upData = await upRes.json();
+
+    assert.ok(upData.shortUrl.includes('sig='));
+    assert.ok(upData.shortUrl.includes('expires='));
+
+    const parsedUrl = new URL(upData.shortUrl);
+    const sig = parsedUrl.searchParams.get('sig');
+    const expires = parsedUrl.searchParams.get('expires');
+
+    const metaRes = await fetch(`${baseUrl}/api/files/${upData.code}?sig=${sig}&expires=${expires}`);
+    assert.equal(metaRes.status, 200);
+    const metaData = await metaRes.json();
+    assert.equal(metaData.code, upData.code);
+    assert.ok(metaData.downloadUrl.includes('sig='));
+    assert.ok(metaData.rawUrl.includes('sig='));
+
+    const unauthMetaRes = await fetch(`${baseUrl}/api/files/${upData.code}`);
+    assert.equal(unauthMetaRes.status, 403);
+  });
+
+  it('hides deduplication metadata from public unauthenticated callers (FINDING-11)', async () => {
+    const ownerCookie = `sera_cid=${'f'.repeat(64)}`;
+    const textBuffer = Buffer.from('dedup oracle test string payload 1234567890', 'utf8');
+
+    const firstUp = await fetch(`${baseUrl}/api/upload`, {
+      method: 'POST',
+      headers: {
+        'X-Requested-With': 'sera.drop',
+        Cookie: ownerCookie
+      },
+      body: (() => {
+        const f = new FormData();
+        f.append('file', new Blob([textBuffer], { type: 'text/plain' }), 'dedup1.txt');
+        return f;
+      })()
+    });
+    assert.equal(firstUp.status, 201);
+    const firstData = await firstUp.json();
+    assert.equal(firstData.deduplicated, false);
+
+    const secondUp = await fetch(`${baseUrl}/api/upload`, {
+      method: 'POST',
+      headers: {
+        'X-Requested-With': 'sera.drop',
+        Cookie: ownerCookie
+      },
+      body: (() => {
+        const f = new FormData();
+        f.append('file', new Blob([textBuffer], { type: 'text/plain' }), 'dedup2.txt');
+        return f;
+      })()
+    });
+    assert.equal(secondUp.status, 201);
+    const secondData = await secondUp.json();
+    assert.equal(secondData.deduplicated, true);
+
+    const strangerRes = await fetch(`${baseUrl}/api/files/${secondData.code}`, {
+      headers: {
+        Cookie: `sera_cid=${'1'.repeat(64)}`
+      }
+    });
+    assert.equal(strangerRes.status, 200);
+    const strangerData = await strangerRes.json();
+    assert.equal(strangerData.deduplicated, false);
+  });
+
+  it('enforces strict Cache-Control and HSTS security headers (FINDING-10 & Item A3)', async () => {
+    const permUp = await uploadMultipartFile({
+      filename: 'permanent-cache.txt',
+      contentType: 'text/plain',
+      buffer: Buffer.from('permanent cache data', 'utf8')
+    });
+    const permData = await permUp.json();
+
+    const rawPermRes = await fetch(`${baseUrl}/raw/${permData.code}`);
+    assert.equal(rawPermRes.status, 200);
+    assert.equal(rawPermRes.headers.get('cache-control'), 'public, max-age=86400, immutable');
+
+    const signedUp = await uploadMultipartFile({
+      filename: 'ephemeral-signed.txt',
+      contentType: 'text/plain',
+      buffer: Buffer.from('signed cache data', 'utf8'),
+      fields: { requireSignedUrl: '1' }
+    });
+    const signedData = await signedUp.json();
+    const rawSignedUrl = new URL(signedData.rawUrl);
+
+    const rawSignedRes = await fetch(signedData.rawUrl);
+    assert.equal(rawSignedRes.status, 200);
+    assert.equal(rawSignedRes.headers.get('cache-control'), 'private, no-cache, no-store, must-revalidate');
+    assert.equal(rawSignedRes.headers.get('pragma'), 'no-cache');
+
+    const raw404Res = await fetch(`${baseUrl}/raw/notfound123`);
+    assert.equal(raw404Res.status, 404);
+    assert.equal(raw404Res.headers.get('cache-control'), 'no-store, no-cache, must-revalidate, proxy-revalidate');
+
+    const hstsRes = await fetch(`${baseUrl}/api/status`, {
+      headers: {
+        'X-Forwarded-Proto': 'https'
+      }
+    });
+    assert.equal(hstsRes.status, 200);
+    assert.equal(
+      hstsRes.headers.get('strict-transport-security'),
+      'max-age=63072000; includeSubDomains; preload'
+    );
+  });
+
+  it('rejects extended SSRF payloads across both URL upload endpoints (Item A2)', async () => {
+    const ssrfTargets = [
+      'http://0.0.0.0/test',
+      'http://100.64.0.1/test',
+      'http://198.18.0.1/test',
+      'http://224.0.0.1/test',
+      'http://[::ffff:127.0.0.1]/test',
+      'http://[::ffff:7f00:1]/test'
+    ];
+
+    for (const target of ssrfTargets) {
+      const apiRes = await fetch(`${baseUrl}/api/url-upload`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'sera.drop'
+        },
+        body: JSON.stringify({ url: target })
+      });
+      assert.equal(apiRes.status, 412, `Expected 412 for /api/url-upload targeting ${target}`);
+
+      const catboxForm = new FormData();
+      catboxForm.append('reqtype', 'urlupload');
+      catboxForm.append('url', target);
+      const catboxRes = await fetch(`${baseUrl}/user/api.php`, {
+        method: 'POST',
+        body: catboxForm
+      });
+      assert.equal(catboxRes.status, 412, `Expected 412 for /user/api.php targeting ${target}`);
+    }
+  });
+
+  it('enforces CSRF sec-fetch-site protection on Litterbox and Catbox endpoints', async () => {
+    const litterForm = new FormData();
+    litterForm.append('reqtype', 'fileupload');
+    litterForm.append('time', '1h');
+    litterForm.append('fileToUpload', new Blob(['sample'], { type: 'text/plain' }), 'test.txt');
+
+    const litterRes = await fetch(`${baseUrl}/resources/internals/api.php`, {
+      method: 'POST',
+      headers: {
+        'sec-fetch-site': 'cross-site',
+        origin: 'https://malicious-origin.com'
+      },
+      body: litterForm
+    });
+    assert.equal(litterRes.status, 403);
+    const litterText = await litterRes.text();
+    assert.equal(litterText, 'Cross-site requests not allowed.');
+
+    const catboxForm = new FormData();
+    catboxForm.append('reqtype', 'fileupload');
+    catboxForm.append('fileToUpload', new Blob(['sample'], { type: 'text/plain' }), 'test.txt');
+
+    const catboxRes = await fetch(`${baseUrl}/user/api.php`, {
+      method: 'POST',
+      headers: {
+        'sec-fetch-site': 'cross-site',
+        origin: 'https://malicious-origin.com'
+      },
+      body: catboxForm
+    });
+    assert.equal(catboxRes.status, 403);
+    const catboxText = await catboxRes.text();
+    assert.equal(catboxText, 'Cross-site requests not allowed.');
   });
 });

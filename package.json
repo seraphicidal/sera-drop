@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test test/server.test.js"
+    "test": "node --test test/server.test.js test/e2e.test.js"
   },
   "dependencies": {
     "cloudflared": "^0.7.3",
@@ -14,5 +14,8 @@
     "file-type": "^16.5.4",
     "multer": "^2.5.0",
     "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "playwright": "^1.65.0"
   }
 }
