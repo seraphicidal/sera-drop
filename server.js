@@ -2874,7 +2874,7 @@ app.get(['/s/:code', '/s/:code.:ext'], lookupRateLimiter, (req, res) => {
       );
     }
 
-    const renderedHtml = rawTemplate.replace('<title>sera.drop</title>', metaTags.join('\n  '));
+    const renderedHtml = rawTemplate.replace('<title>sera.drop</title>', () => metaTags.join('\n  '));
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.status(200).send(renderedHtml);
   } catch {
@@ -2913,7 +2913,7 @@ app.get('/c/:short', lookupRateLimiter, (req, res) => {
       `<meta name="twitter:description" content="${escapeHtml(description)}" />`
     ];
 
-    const renderedHtml = rawTemplate.replace('<title>sera.drop</title>', metaTags.join('\n  '));
+    const renderedHtml = rawTemplate.replace('<title>sera.drop</title>', () => metaTags.join('\n  '));
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.status(200).send(renderedHtml);
   } catch {
