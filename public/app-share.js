@@ -477,7 +477,7 @@
 
   async function renderPreview(file, container) {
     const cat = file.previewCategory;
-    const safeRawUrl = escapeHtml(sanitizeUrl(file.rawUrl));
+    const safeRawUrl = escapeHtml(sanitizeUrl(file.directUrl || file.rawUrl));
     const safeName = escapeHtml(file.originalName);
     if (cat === 'image') {
       container.innerHTML = `

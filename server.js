@@ -212,22 +212,43 @@ app.use((req, res, next) => {
     {
       method: req.method,
       headers,
-      timeout: 300000
+      timeout: 1800000
     },
     (proxyRes) => {
-      res.writeHead(proxyRes.statusCode, proxyRes.headers);
+      const responseHeaders = { ...proxyRes.headers };
+      delete responseHeaders['connection'];
+      delete responseHeaders['transfer-encoding'];
+      delete responseHeaders['keep-alive'];
+      res.writeHead(proxyRes.statusCode, responseHeaders);
       proxyRes.pipe(res);
     }
   );
 
-  proxyReq.on('error', () => {
+  proxyReq.on('timeout', () => {
+    proxyReq.destroy(new Error('Gateway Timeout'));
+  });
+
+  proxyReq.on('error', (err) => {
     if (!res.headersSent) {
-      res.status(502).json({ error: 'Bad Gateway: failed to connect to upstream server.' });
+      const isTimeout = err && err.message === 'Gateway Timeout';
+      res.status(isTimeout ? 504 : 502).json({
+        error: isTimeout
+          ? 'Gateway Timeout: upstream server did not respond in time.'
+          : 'Bad Gateway: failed to connect to upstream server.'
+      });
+    }
+  });
+
+  res.on('close', () => {
+    if (!res.writableEnded && !proxyReq.destroyed) {
+      proxyReq.destroy();
     }
   });
 
   req.on('aborted', () => {
-    proxyReq.destroy();
+    if (!proxyReq.destroyed) {
+      proxyReq.destroy();
+    }
   });
 
   req.pipe(proxyReq);
@@ -2367,10 +2388,10 @@ function resolveRawMediaDelivery(record) {
   };
 }
 
-app.options(['/raw/:code', '/raw/:code.:ext', '/files/:codeWithExt', '/f/:code'], lookupRateLimiter, (req, res) => {
+app.options('*', lookupRateLimiter, (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept, X-Requested-With, X-Delete-Token, Authorization');
   res.setHeader('Access-Control-Max-Age', '86400');
   res.status(204).end();
 });
@@ -2559,11 +2580,6 @@ app.get(['/s/:code', '/s/:code.:ext'], lookupRateLimiter, (req, res) => {
         `<meta property="og:video:type" content="${escapeHtml(delivery.contentType)}" />`,
         `<meta property="og:video:width" content="1280" />`,
         `<meta property="og:video:height" content="720" />`,
-        `<meta property="og:image" content="${escapeHtml(iconUrl)}" />`,
-        `<meta property="og:image:secure_url" content="${escapeHtml(iconUrl)}" />`,
-        `<meta property="og:image:type" content="image/png" />`,
-        `<meta property="og:image:width" content="512" />`,
-        `<meta property="og:image:height" content="512" />`,
         `<meta name="twitter:card" content="player" />`,
         `<meta name="twitter:title" content="${escapeHtml(record.originalName)}" />`,
         `<meta name="twitter:description" content="${escapeHtml(description)}" />`,
