@@ -12,5 +12,15 @@ services:
         value: "true"
       - key: SERA_DROP_SECRET
         generateValue: true
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: TRUST_CF_HEADERS
+        value: "true"
+      - key: OPERATOR_NAME
+        value: sera.drop Compliance & Security
+      - key: OPERATOR_ADDRESS
+        value: Render Cloud Infrastructure, EU/US
+      - key: OPERATOR_EMAIL
+        value: abuse@sera-drop.onrender.com
       - key: UPSTREAM_URL
         value: https://drop.130-61-188-184.sslip.io
