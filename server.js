@@ -1642,9 +1642,9 @@ function escapeHtml(value) {
 }
 
 function getOperatorConfig() {
-  const name = String(process.env.OPERATOR_NAME || '').trim();
-  const address = String(process.env.OPERATOR_ADDRESS || '').trim();
-  const email = String(process.env.OPERATOR_EMAIL || '').trim();
+  const name = String(process.env.OPERATOR_NAME || '').trim() || 'sera.drop Operator';
+  const address = String(process.env.OPERATOR_ADDRESS || '').trim() || 'Online Service Provider, EU / Global';
+  const email = String(process.env.OPERATOR_EMAIL || '').trim() || 'taniervlak@gmail.com';
   const phone = String(process.env.OPERATOR_PHONE || '').trim();
   return {
     name: name || null,
