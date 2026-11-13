@@ -230,6 +230,7 @@
     queueItems.forEach((entry) => {
       const row = document.createElement('div');
       row.className = 'queue-item';
+      row.setAttribute('data-queue-id', String(entry.id));
       row.setAttribute('data-queue-status', entry.status.toLowerCase());
 
       const statusBadgeClass =
@@ -285,6 +286,22 @@
 
       uploadQueueList.appendChild(row);
     });
+  }
+
+  function updateQueueItemProgress(entry) {
+    if (!uploadQueueList) return;
+    const row = uploadQueueList.querySelector(`[data-queue-id="${entry.id}"]`);
+    if (!row) {
+      renderQueueDrawer();
+      return;
+    }
+    const telemetryParts = [formatBytes(entry.file.size)];
+    if (entry.speedText) telemetryParts.push(entry.speedText);
+    if (entry.etaText) telemetryParts.push(`ETA ${entry.etaText}`);
+    const metaEl = row.querySelector('.queue-item-meta');
+    if (metaEl) metaEl.textContent = telemetryParts.join(' · ');
+    const fillEl = row.querySelector('.progress-fill');
+    if (fillEl) fillEl.style.width = `${Math.max(0, Math.min(100, entry.percent))}%`;
   }
 
   function cancelQueueItem(id) {
@@ -405,7 +422,7 @@
           entry.etaText = formatEta(etaSec);
           progressPercent.textContent = `${pct}%`;
           progressFill.style.width = `${pct}%`;
-          renderQueueDrawer();
+          updateQueueItemProgress(entry);
         }
       };
 
@@ -413,13 +430,24 @@
         entry.xhr = null;
         progressWrapper.classList.remove('active');
         if (xhr.status >= 200 && xhr.status < 300) {
+          let data;
+          try {
+            data = JSON.parse(xhr.responseText);
+          } catch {
+            entry.status = 'Failed';
+            entry.errorMessage = 'Invalid server response';
+            renderQueueDrawer();
+            showToast('Upload failed');
+            showInlineError(`${file.name}: Invalid response received from server.`);
+            resolve();
+            return;
+          }
           entry.status = 'Done';
           entry.percent = 100;
           entry.speedText = '';
           entry.etaText = '';
           renderQueueDrawer();
 
-          const data = JSON.parse(xhr.responseText);
           if (data.deleteToken) {
             saveOwnedFileToken(data.code, data.deleteToken);
           }
@@ -593,17 +621,23 @@
     resultDirectUrl.value = item.directUrl || item.rawUrl;
     openSharePageBtn.href = `/s/${encodeURIComponent(item.code)}`;
 
-    if (window.SeraQR) {
-      window.SeraQR.applyQrToElements(
-        item.shortUrl || window.location.origin + `/s/${item.code}`,
-        resultQrImage,
-        downloadQrBtn,
-        `qr-${item.code}.png`
-      );
-    } else if (item.qrCodeDataUrl) {
-      resultQrImage.src = item.qrCodeDataUrl;
-      downloadQrBtn.href = item.qrCodeDataUrl;
-      downloadQrBtn.download = `qr-${item.code}.png`;
+    const qrRendered = window.SeraQR
+      ? window.SeraQR.applyQrToElements(
+          item.shortUrl || window.location.origin + `/s/${item.code}`,
+          resultQrImage,
+          downloadQrBtn,
+          `qr-${item.code}.png`
+        )
+      : false;
+    if (!qrRendered) {
+      if (item.qrCodeDataUrl) {
+        resultQrImage.src = item.qrCodeDataUrl;
+        downloadQrBtn.href = item.qrCodeDataUrl;
+        downloadQrBtn.download = `qr-${item.code}.png`;
+      } else {
+        resultQrImage.removeAttribute('src');
+        downloadQrBtn.removeAttribute('href');
+      }
     }
 
     resultDedupeBadge.classList.toggle('hidden-el', !item.deduplicated);
@@ -704,8 +738,14 @@
       const ownedCodes = Object.keys(getOwnedFilesMap()).reverse();
       const codeParam = ownedCodes.length ? `&codes=${encodeURIComponent(ownedCodes.slice(0, 100).join(','))}` : '';
       const res = await fetch(`/api/files?mine=1${codeParam}`);
+      if (!res.ok) {
+        return;
+      }
       const files = await res.json();
-      currentLoadedFiles = Array.isArray(files) ? files : [];
+      if (!Array.isArray(files)) {
+        return;
+      }
+      currentLoadedFiles = files;
       fileCountLabel.textContent = `${currentLoadedFiles.length}`;
 
       const returnedCodes = new Set(currentLoadedFiles.map((f) => f.code));

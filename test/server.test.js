@@ -999,4 +999,161 @@ describe('sera-drop Security & Legal Compliance Suite', () => {
     const catboxText = await catboxRes.text();
     assert.equal(catboxText, 'Cross-site requests not allowed.');
   });
+
+  it('prevents unauthenticated signed share page metadata/signature leaks and ?codes= bypass', async () => {
+    const ownerCookie = `sera_cid=${'9'.repeat(64)}`;
+    const strangerCookie = `sera_cid=${'8'.repeat(64)}`;
+    const form = new FormData();
+    form.append('requireSignedUrl', 'true');
+    form.append('file', new Blob(['protected secret video bytes'], { type: 'image/png' }), 'signed-secret-photo.png');
+
+    const upRes = await fetch(`${baseUrl}/api/upload`, {
+      method: 'POST',
+      headers: {
+        'X-Requested-With': 'sera.drop',
+        Cookie: ownerCookie
+      },
+      body: form
+    });
+    assert.equal(upRes.status, 201);
+    const upData = await upRes.json();
+
+    const unauthShareRes = await fetch(`${baseUrl}/s/${upData.code}`);
+    assert.equal(unauthShareRes.status, 403);
+    const unauthShareHtml = await unauthShareRes.text();
+    assert.ok(!unauthShareHtml.includes('signed-secret-photo.png'));
+    assert.ok(!unauthShareHtml.includes('?sig='));
+
+    const strangerCodesRes = await fetch(`${baseUrl}/api/files?codes=${encodeURIComponent(upData.code)}`, {
+      headers: { Cookie: strangerCookie }
+    });
+    assert.equal(strangerCodesRes.status, 200);
+    const strangerList = await strangerCodesRes.json();
+    assert.equal(strangerList.length, 0);
+
+    const ownerCodesRes = await fetch(`${baseUrl}/api/files?codes=${encodeURIComponent(upData.code)}`, {
+      headers: { Cookie: ownerCookie }
+    });
+    assert.equal(ownerCodesRes.status, 200);
+    const ownerList = await ownerCodesRes.json();
+    assert.equal(ownerList.length, 1);
+    assert.ok(ownerList[0].rawUrl.includes('sig='));
+  });
+
+  it('recovers metadata from sidecars when files.json is empty {}, supports DELETE /api/albums/:short, and allows deletefiles at full quota', async () => {
+    const userHash = 'quota-delete-user-hash';
+    const previousLimit = process.env.MAX_CLIENT_STORAGE_BYTES;
+    process.env.MAX_CLIENT_STORAGE_BYTES = '40';
+
+    try {
+      const catUpload = new FormData();
+      catUpload.append('reqtype', 'fileupload');
+      catUpload.append('userhash', userHash);
+      catUpload.append('fileToUpload', new Blob([Buffer.alloc(32, 0x41)], { type: 'text/plain' }), 'fill-quota.txt');
+
+      const upRes = await fetch(`${baseUrl}/user/api.php`, {
+        method: 'POST',
+        body: catUpload
+      });
+      assert.equal(upRes.status, 200);
+      const uploadedUrl = await upRes.text();
+      const uploadedCode = uploadedUrl.split('/').pop().split('.')[0];
+
+      const delForm = new FormData();
+      delForm.append('reqtype', 'deletefiles');
+      delForm.append('userhash', userHash);
+      delForm.append('files', uploadedCode);
+      const delRes = await fetch(`${baseUrl}/user/api.php`, {
+        method: 'POST',
+        body: delForm
+      });
+      assert.equal(delRes.status, 200);
+    } finally {
+      if (previousLimit === undefined) {
+        delete process.env.MAX_CLIENT_STORAGE_BYTES;
+      } else {
+        process.env.MAX_CLIENT_STORAGE_BYTES = previousLimit;
+      }
+    }
+
+    const normalUp = await uploadMultipartFile({
+      filename: 'empty-db-recovery.txt',
+      contentType: 'text/plain',
+      buffer: Buffer.from('sidecar recovery test data', 'utf8')
+    });
+    assert.equal(normalUp.status, 201);
+    const normalData = await normalUp.json();
+
+    const dbPath = path.join(testDataDir, 'files.json');
+    const dbBakPath = path.join(testDataDir, 'files.json.bak');
+    fs.writeFileSync(dbPath, '{}', 'utf8');
+    if (fs.existsSync(dbBakPath)) fs.unlinkSync(dbBakPath);
+
+    const recoveredMeta = await fetch(`${baseUrl}/api/files/${normalData.code}`);
+    assert.equal(recoveredMeta.status, 200);
+    const recoveredJson = await recoveredMeta.json();
+    assert.equal(recoveredJson.code, normalData.code);
+
+    const albumRes = await fetch(`${baseUrl}/api/albums`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'sera.drop'
+      },
+      body: JSON.stringify({ title: 'Temp Album', files: [normalData.code] })
+    });
+    assert.equal(albumRes.status, 201);
+    const albumData = await albumRes.json();
+
+    const strangerDelAlbum = await fetch(`${baseUrl}/api/albums/${albumData.short}`, {
+      method: 'DELETE',
+      headers: { 'X-Requested-With': 'sera.drop' }
+    });
+    assert.equal(strangerDelAlbum.status, 401);
+
+    const ownerDelAlbum = await fetch(`${baseUrl}/api/albums/${albumData.short}`, {
+      method: 'DELETE',
+      headers: {
+        'X-Requested-With': 'sera.drop',
+        'X-Delete-Token': albumData.deleteToken
+      }
+    });
+    assert.equal(ownerDelAlbum.status, 200);
+
+    const afterDelAlbum = await fetch(`${baseUrl}/api/albums/${albumData.short}`);
+    assert.equal(afterDelAlbum.status, 404);
+  });
+
+  it('rejects .ps1 scripts, lists csam in invalid report category error, and ignores malformed cookies', async () => {
+    const ps1Res = await uploadMultipartFile({
+      filename: 'payload.ps1',
+      contentType: 'text/plain',
+      buffer: Buffer.from('Write-Host hello', 'utf8')
+    });
+    assert.equal(ps1Res.status, 415);
+
+    const badCatRes = await fetch(`${baseUrl}/api/report`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'sera.drop'
+      },
+      body: JSON.stringify({
+        targetUrl: `${baseUrl}/s/abc12345`,
+        category: 'invalid_category',
+        explanation: 'Valid explanation text length here.',
+        notifierName: 'Tester',
+        notifierEmail: 'tester@example.com',
+        goodFaithConfirmed: true
+      })
+    });
+    assert.equal(badCatRes.status, 400);
+    const badCatBody = await badCatRes.json();
+    assert.match(badCatBody.error, /\bcsam\b/);
+
+    const malformedCookieRes = await fetch(`${baseUrl}/api/status`, {
+      headers: { Cookie: 'sera_cid=%E0%A4%A; broken=%ZZ' }
+    });
+    assert.equal(malformedCookieRes.status, 200);
+  });
 });

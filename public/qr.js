@@ -71,10 +71,11 @@
       if (utf8.length <= cap) break;
       version++;
     }
-    if (version > 10) version = 10;
+    if (version > 10) {
+      throw new Error('QR payload exceeds maximum capacity');
+    }
     const spec = V_SPECS[version];
-    const maxPayload = spec.data - (version <= 9 ? 2 : 3);
-    const bytes = utf8.length > maxPayload ? utf8.slice(0, maxPayload) : utf8;
+    const bytes = utf8;
 
     const bits = [];
     const pushBits = (val, len) => {
@@ -294,15 +295,19 @@
   }
 
   function applyQrToElements(urlText, imgEl, downloadAnchorEl, filename) {
-    const dataUrl = toPngDataUrl(urlText, 240);
-    if (imgEl) {
-      imgEl.src = dataUrl;
+    try {
+      const dataUrl = toPngDataUrl(urlText, 240);
+      if (imgEl) {
+        imgEl.src = dataUrl;
+      }
+      if (downloadAnchorEl) {
+        downloadAnchorEl.href = dataUrl;
+        if (filename) downloadAnchorEl.download = filename;
+      }
+      return true;
+    } catch {
+      return false;
     }
-    if (downloadAnchorEl) {
-      downloadAnchorEl.href = dataUrl;
-      if (filename) downloadAnchorEl.download = filename;
-    }
-    return dataUrl;
   }
 
   function createFocusTrap(modalEl, onClose) {

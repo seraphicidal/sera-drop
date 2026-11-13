@@ -2,7 +2,15 @@ const express = require('express');
 const multer = require('multer');
 const QRCode = require('qrcode');
 const { bin, install, Tunnel } = require('cloudflared');
-const FileType = require('file-type');
+let fileTypeModulePromise = null;
+
+async function detectFileTypeFromBuffer(buffer) {
+  if (!fileTypeModulePromise) {
+    fileTypeModulePromise = import('file-type');
+  }
+  const mod = await fileTypeModulePromise;
+  return mod.fileTypeFromBuffer(buffer);
+}
 const crypto = require('crypto');
 const dns = require('dns');
 const http = require('http');
@@ -15,7 +23,21 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.disable('x-powered-by');
-app.set('trust proxy', true);
+const rawTrustProxy = process.env.TRUST_PROXY;
+app.set(
+  'trust proxy',
+  rawTrustProxy !== undefined
+    ? rawTrustProxy === 'true'
+      ? true
+      : rawTrustProxy === 'false'
+        ? false
+        : /^\d+$/.test(rawTrustProxy)
+          ? Number(rawTrustProxy)
+          : rawTrustProxy
+    : process.env.RENDER
+      ? 1
+      : 'loopback, linklocal, uniquelocal'
+);
 
 const defaultStorageRoot =
   fs.existsSync('/var/data') && fs.statSync('/var/data').isDirectory()
@@ -60,7 +82,7 @@ const BLOCKED_PUBLIC_EXTENSIONS = new Set([
   '.exe', '.scr', '.cpl', '.jar', '.msi', '.msp', '.mst', '.bat', '.cmd', '.com',
   '.vbs', '.vbe', '.wsf', '.wsh', '.hta', '.reg', '.dll', '.sys', '.drv', '.pif',
   '.gadget', '.application', '.lnk', '.htaccess', '.php', '.phtml', '.phar', '.asp', '.aspx', '.jsp',
-  '.elf', '.bin', '.run', '.dylib', '.so'
+  '.elf', '.bin', '.run', '.dylib', '.so', '.ps1', '.psm1', '.psd1', '.apk', '.appx', '.msix', '.cpl'
 ]);
 
 const BLOCKED_PUBLIC_MIMES = new Set([
@@ -207,11 +229,11 @@ app.use((req, res, next) => {
   const transport = isHttps ? https : http;
   const targetUrl = new URL(req.url, upstreamTarget);
 
+  const resolvedIncomingIp = getClientIp(req);
   const incomingClientIp =
-    (typeof req.headers['cf-connecting-ip'] === 'string' && req.headers['cf-connecting-ip'].trim()) ||
-    (typeof req.headers['x-real-ip'] === 'string' && req.headers['x-real-ip'].trim()) ||
-    (typeof req.headers['x-forwarded-for'] === 'string' && req.headers['x-forwarded-for'].split(',')[0].trim()) ||
-    req.socket.remoteAddress;
+    resolvedIncomingIp !== 'unknown'
+      ? resolvedIncomingIp
+      : String(req.socket.remoteAddress || '').replace(/^::ffff:/i, '');
 
   const headers = { ...req.headers };
   headers.host = urlObj.host;
@@ -295,7 +317,11 @@ function parseCookies(cookieHeader) {
     const key = pair.slice(0, idx).trim();
     const val = pair.slice(idx + 1).trim();
     if (key) {
-      cookies[key] = decodeURIComponent(val);
+      try {
+        cookies[key] = decodeURIComponent(val);
+      } catch {
+        cookies[key] = val;
+      }
     }
   }
   return cookies;
@@ -335,9 +361,11 @@ app.use((req, res, next) => {
 });
 
 function getClientIp(req) {
-  const cfHeader = req.headers['cf-connecting-ip'];
-  if (typeof cfHeader === 'string' && net.isIP(cfHeader.trim())) {
-    return cfHeader.trim();
+  if (process.env.TRUST_CF_HEADERS === 'true') {
+    const cfHeader = req.headers['cf-connecting-ip'];
+    if (typeof cfHeader === 'string' && net.isIP(cfHeader.trim())) {
+      return cfHeader.trim();
+    }
   }
   const candidate = req.ip;
   if (typeof candidate === 'string' && candidate.trim()) {
@@ -447,18 +475,52 @@ function sanitizeMapObject(parsed) {
   return clean;
 }
 
+let memoryDbStat = null;
+let pendingDbToSave = null;
+let dbWriteSeq = 0;
+let sidecarIndexMap = null;
+let sidecarIndexBuiltAt = 0;
+
+function readFileStatSafe(filePath) {
+  try {
+    const st = fs.statSync(filePath);
+    return { size: st.size, mtimeMs: st.mtimeMs, ino: st.ino };
+  } catch {
+    return null;
+  }
+}
+
+function flushPendingDatabaseSave() {
+  if (saveDbTimeout) {
+    clearTimeout(saveDbTimeout);
+    saveDbTimeout = null;
+  }
+  if (pendingDbToSave) {
+    const target = pendingDbToSave;
+    pendingDbToSave = null;
+    saveDatabase(target);
+  }
+}
+
 function saveRecordSidecar(record) {
   if (!record || !record.storedName || !record.code) return;
   try {
     const base = path.basename(record.storedName);
-    const metaPath = path.join(UPLOADS_DIR, `${base}.${record.code}.meta.json`);
+    const metaFilename = `${base}.${record.code}.meta.json`;
+    const metaPath = path.join(UPLOADS_DIR, metaFilename);
     const tmpFile = `${metaPath}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
     fs.writeFileSync(tmpFile, JSON.stringify(record, null, 2), 'utf8');
     fs.renameSync(tmpFile, metaPath);
+    if (sidecarIndexMap) {
+      sidecarIndexMap.set(record.code, metaFilename);
+    }
   } catch {}
 }
 
 function deleteRecordSidecar(storedName, code) {
+  if (code && sidecarIndexMap) {
+    sidecarIndexMap.delete(code);
+  }
   if (!storedName) return;
   const base = path.basename(storedName);
   if (code) {
@@ -480,8 +542,13 @@ function recoverDatabaseFromSidecars(currentDb) {
   try {
     if (fs.existsSync(UPLOADS_DIR)) {
       const diskFiles = fs.readdirSync(UPLOADS_DIR);
+      const nextIndex = new Map();
       for (const diskFile of diskFiles) {
         if (!diskFile.endsWith('.meta.json')) continue;
+        const match = diskFile.match(/\.([a-zA-Z0-9]{6,16})\.meta\.json$/);
+        if (match) {
+          nextIndex.set(match[1], diskFile);
+        }
         const metaPath = path.join(UPLOADS_DIR, diskFile);
         try {
           const raw = fs.readFileSync(metaPath, 'utf8');
@@ -495,19 +562,14 @@ function recoverDatabaseFromSidecars(currentDb) {
           }
         } catch {}
       }
+      sidecarIndexMap = nextIndex;
+      sidecarIndexBuiltAt = Date.now();
     }
   } catch {}
   if (restored) {
-    try {
-      const tmpFile = `${DB_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-      fs.writeFileSync(tmpFile, JSON.stringify(merged, null, 2), 'utf8');
-      fs.renameSync(tmpFile, DB_FILE);
-      try {
-        fs.copyFileSync(DB_FILE, DB_BACKUP_FILE);
-      } catch {}
-    } catch {}
+    saveDatabase(merged);
   }
-  return merged;
+  return { merged, restored };
 }
 
 function syncMissingSidecars(db) {
@@ -527,21 +589,36 @@ function findSidecarByCode(code) {
     return null;
   }
   try {
-    if (fs.existsSync(UPLOADS_DIR)) {
-      const diskFiles = fs.readdirSync(UPLOADS_DIR);
-      const targetSuffix = `.${code}.meta.json`;
-      for (const file of diskFiles) {
-        if (file.endsWith(targetSuffix)) {
-          const metaPath = path.join(UPLOADS_DIR, file);
-          const raw = fs.readFileSync(metaPath, 'utf8');
-          const rec = JSON.parse(raw);
-          if (rec && rec.code === code && rec.storedName) {
-            const binPath = path.join(UPLOADS_DIR, path.basename(rec.storedName));
-            if (fs.existsSync(binPath)) {
-              return rec;
-            }
+    const now = Date.now();
+    if (sidecarIndexMap === null || (!sidecarIndexMap.has(code) && now - sidecarIndexBuiltAt > 15000)) {
+      const nextIndex = new Map();
+      if (fs.existsSync(UPLOADS_DIR)) {
+        const diskFiles = fs.readdirSync(UPLOADS_DIR);
+        for (const diskFile of diskFiles) {
+          const match = diskFile.match(/\.([a-zA-Z0-9]{6,16})\.meta\.json$/);
+          if (match) {
+            nextIndex.set(match[1], diskFile);
           }
         }
+      }
+      sidecarIndexMap = nextIndex;
+      sidecarIndexBuiltAt = now;
+    }
+    const targetFile = sidecarIndexMap.get(code);
+    if (!targetFile) {
+      return null;
+    }
+    const metaPath = path.join(UPLOADS_DIR, targetFile);
+    if (!fs.existsSync(metaPath)) {
+      sidecarIndexMap.delete(code);
+      return null;
+    }
+    const raw = fs.readFileSync(metaPath, 'utf8');
+    const rec = JSON.parse(raw);
+    if (rec && rec.code === code && rec.storedName) {
+      const binPath = path.join(UPLOADS_DIR, path.basename(rec.storedName));
+      if (fs.existsSync(binPath)) {
+        return rec;
       }
     }
   } catch {}
@@ -550,6 +627,19 @@ function findSidecarByCode(code) {
 
 function loadDatabase() {
   try {
+    if (memoryDbCache !== null) {
+      const diskStat = readFileStatSafe(DB_FILE);
+      if (
+        diskStat &&
+        memoryDbStat &&
+        diskStat.size === memoryDbStat.size &&
+        diskStat.mtimeMs === memoryDbStat.mtimeMs &&
+        diskStat.ino === memoryDbStat.ino
+      ) {
+        return memoryDbCache;
+      }
+    }
+
     let parsed = null;
     let loadedFromDisk = false;
     if (fs.existsSync(DB_FILE)) {
@@ -565,22 +655,27 @@ function loadDatabase() {
       try {
         const raw = fs.readFileSync(DB_BACKUP_FILE, 'utf8');
         if (raw.trim()) {
-          parsed = sanitizeMapObject(JSON.parse(raw));
-          loadedFromDisk = true;
+          const backupParsed = sanitizeMapObject(JSON.parse(raw));
+          if (Object.keys(backupParsed).length > 0) {
+            parsed = backupParsed;
+            loadedFromDisk = true;
+          }
         }
       } catch {}
     }
-    if (!loadedFromDisk) {
+    if (!loadedFromDisk || !parsed || Object.keys(parsed).length === 0) {
       if (!parsed) {
         parsed = memoryDbCache ? { ...memoryDbCache } : {};
       }
-      parsed = recoverDatabaseFromSidecars(parsed);
+      const recovery = recoverDatabaseFromSidecars(parsed);
+      parsed = recovery.merged;
       syncMissingSidecars(parsed);
-      if (Object.keys(parsed).length > 0) {
+      if ((!loadedFromDisk || recovery.restored) && Object.keys(parsed).length > 0) {
         saveDatabase(parsed);
       }
     }
     memoryDbCache = parsed;
+    memoryDbStat = readFileStatSafe(DB_FILE);
     return parsed;
   } catch {
     if (memoryDbCache !== null) {
@@ -592,11 +687,18 @@ function loadDatabase() {
 
 function saveDatabase(db) {
   if (!db || typeof db !== 'object') return;
+  dbWriteSeq += 1;
+  pendingDbToSave = null;
+  if (saveDbTimeout) {
+    clearTimeout(saveDbTimeout);
+    saveDbTimeout = null;
+  }
   memoryDbCache = db;
   try {
     const tmpFile = `${DB_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
     fs.writeFileSync(tmpFile, JSON.stringify(db, null, 2), 'utf8');
     fs.renameSync(tmpFile, DB_FILE);
+    memoryDbStat = readFileStatSafe(DB_FILE);
     try {
       fs.copyFileSync(DB_FILE, DB_BACKUP_FILE);
     } catch {}
@@ -604,7 +706,35 @@ function saveDatabase(db) {
 }
 
 function scheduleDatabaseSave(db) {
-  saveDatabase(db);
+  if (!db || typeof db !== 'object') return;
+  memoryDbCache = db;
+  pendingDbToSave = db;
+  if (saveDbTimeout) return;
+  saveDbTimeout = setTimeout(async () => {
+    saveDbTimeout = null;
+    const target = pendingDbToSave;
+    if (!target) return;
+    pendingDbToSave = null;
+    const mySeq = ++dbWriteSeq;
+    const tmpFile = `${DB_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+    try {
+      await fs.promises.writeFile(tmpFile, JSON.stringify(target, null, 2), 'utf8');
+      if (mySeq !== dbWriteSeq) {
+        await fs.promises.unlink(tmpFile).catch(() => {});
+        return;
+      }
+      await fs.promises.rename(tmpFile, DB_FILE);
+      if (mySeq === dbWriteSeq) {
+        memoryDbStat = readFileStatSafe(DB_FILE);
+      }
+      await fs.promises.copyFile(DB_FILE, DB_BACKUP_FILE).catch(() => {});
+    } catch {
+      await fs.promises.unlink(tmpFile).catch(() => {});
+    }
+  }, 1500);
+  if (typeof saveDbTimeout.unref === 'function') {
+    saveDbTimeout.unref();
+  }
 }
 
 let memoryAlbumsCache = null;
@@ -811,6 +941,23 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(String(token)).digest('hex');
 }
 
+function isRecordOwner(req, record) {
+  if (!req || !record) return false;
+  const deleteHeader = String(req.headers?.['x-delete-token'] || '').trim();
+  const hasDeleteToken = Boolean(
+    deleteHeader &&
+      record.deleteTokenHash &&
+      safeTimingEqualStrings(record.deleteTokenHash, hashToken(deleteHeader))
+  );
+  return Boolean(
+    hasDeleteToken ||
+      (req.clientIdHash && record.clientIdHash && safeTimingEqualStrings(req.clientIdHash, record.clientIdHash)) ||
+      (req.customClientHash && record.userhash && safeTimingEqualStrings(req.customClientHash, record.userhash)) ||
+      (req.customClientHash && record.clientIdHash && safeTimingEqualStrings(req.customClientHash, record.clientIdHash)) ||
+      hasValidAdminAuth(req)
+  );
+}
+
 function computeFileSha256(filePath) {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
@@ -949,7 +1096,7 @@ async function isExecutableBinaryFile(filePath) {
   }
 
   try {
-    const detected = await FileType.fromBuffer(headerBuf);
+    const detected = await detectFileTypeFromBuffer(headerBuf);
     if (detected) {
       const ext = String(detected.ext || '').toLowerCase();
       const mime = String(detected.mime || '').toLowerCase();
@@ -1069,7 +1216,8 @@ function preUploadGuard(req, res, next) {
 
   const clientQuota = getClientStorageQuota();
   const clientUsed = getClientStorageUsed(db, req.clientIdHash, req.customClientHash, effectiveIpHash);
-  if (clientUsed + activeUploadBytes + declaredLength > clientQuota) {
+  const isSmallCatboxControl = req.path === '/user/api.php' && declaredLength > 0 && declaredLength <= 65536;
+  if (!isSmallCatboxControl && clientUsed + activeUploadBytes + declaredLength > clientQuota) {
     if (req.path.includes('.php')) {
       return res.status(507).type('text/plain').send('Client storage quota reached.');
     }
@@ -1156,20 +1304,7 @@ async function buildFileResponse(req, record, options = {}) {
     });
   }
 
-  const deleteHeader = String(req?.headers?.['x-delete-token'] || '').trim();
-  const hasDeleteToken = Boolean(
-    deleteHeader &&
-      record.deleteTokenHash &&
-      safeTimingEqualStrings(record.deleteTokenHash, hashToken(deleteHeader))
-  );
-  const isOwner = Boolean(
-    options.isOwner ||
-      hasDeleteToken ||
-      (req?.clientIdHash && record.clientIdHash && safeTimingEqualStrings(req.clientIdHash, record.clientIdHash)) ||
-      (req?.customClientHash && record.userhash && safeTimingEqualStrings(req.customClientHash, record.userhash)) ||
-      (req?.customClientHash && record.clientIdHash && safeTimingEqualStrings(req.customClientHash, record.clientIdHash)) ||
-      (req && hasValidAdminAuth(req))
-  );
+  const isOwner = Boolean(options.isOwner || isRecordOwner(req, record));
 
   return {
     code: record.code,
@@ -1837,7 +1972,7 @@ app.post('/api/report', reportRateLimiter, (req, res) => {
       return res.status(400).json({ error: 'Either targetUrl or targetCode is required.' });
     }
     if (!VALID_REPORT_CATEGORIES.has(category)) {
-      return res.status(400).json({ error: 'Invalid category. Must be copyright, malware, illegal_content, or other.' });
+      return res.status(400).json({ error: 'Invalid category. Must be copyright, malware, illegal_content, csam, or other.' });
     }
     if (explanation.length < 10) {
       return res.status(400).json({ error: 'Explanation must be at least 10 characters.' });
@@ -2448,6 +2583,39 @@ app.post('/api/albums', uploadRateLimiter, requireCsrfHeader, async (req, res) =
   }
 });
 
+app.delete('/api/albums/:short', lookupRateLimiter, requireCsrfHeader, (req, res) => {
+  try {
+    const albums = loadAlbums();
+    const short = String(req.params.short || '').trim();
+    const album = getAlbumByCode(albums, short);
+    if (!album) {
+      return res.status(404).json({ error: 'Album not found' });
+    }
+
+    const providedToken = String(req.headers['x-delete-token'] || '').trim();
+    const hasOwnerToken = Boolean(
+      album.userhash &&
+        providedToken &&
+        safeTimingEqualStrings(hashToken(providedToken), album.userhash)
+    );
+    const hasCookieOwnership = Boolean(
+      album.clientIdHash &&
+        req.clientIdHash &&
+        safeTimingEqualStrings(album.clientIdHash, req.clientIdHash)
+    );
+
+    if (!hasOwnerToken && !hasCookieOwnership && !hasValidAdminAuth(req)) {
+      return res.status(401).json({ error: 'Unauthorized: valid album delete token or owner session required' });
+    }
+
+    delete albums[short];
+    saveAlbums(albums);
+    return res.json({ success: true });
+  } catch {
+    return res.status(500).json({ error: 'Failed to delete album' });
+  }
+});
+
 app.get('/api/albums/:short', lookupRateLimiter, async (req, res) => {
   try {
     reapExpiredFiles();
@@ -2499,7 +2667,9 @@ app.get('/api/files', lookupRateLimiter, async (req, res) => {
         .filter((c) => /^[a-zA-Z0-9]{6,16}$/.test(c))
         .slice(0, 100);
       const codeSet = new Set(requestedCodes);
-      const byCode = requestedCodes.map((c) => getRecordByCode(db, c)).filter(Boolean);
+      const byCode = requestedCodes
+        .map((c) => getRecordByCode(db, c))
+        .filter((r) => Boolean(r) && (!r.requireSignedUrl || isRecordOwner(req, r)));
       if (req.query.mine === '1' || req.query.mine === 'true') {
         const byCookie = Object.values(db).filter((r) => {
           if (!r || codeSet.has(r.code)) return false;
@@ -2866,7 +3036,15 @@ app.get(['/s/:code', '/s/:code.:ext'], lookupRateLimiter, (req, res) => {
     let directFilePath = `/files/${record.code}${directFileExt || ''}`;
     let sigQuery = '';
     if (record.requireSignedUrl) {
-      const expires = Math.floor(Date.now() / 1000) + SIGNED_URL_TTL_SECONDS;
+      const sigCheck = verifySecureLink(`/s/${record.code}`, req.query.sig, req.query.expires);
+      const pathSigCheck = verifySecureLink(req.path, req.query.sig, req.query.expires);
+      const activeSig = sigCheck.ok ? sigCheck : pathSigCheck;
+      if (!activeSig.ok && !isRecordOwner(req, record)) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        return res.status(403).sendFile(shareHtmlPath);
+      }
+      const defaultExpires = Math.floor(Date.now() / 1000) + SIGNED_URL_TTL_SECONDS;
+      const expires = activeSig.ok ? Math.min(activeSig.expires, defaultExpires) : defaultExpires;
       const sig = computeSecureLinkSignature(directFilePath, expires);
       sigQuery = `?sig=${sig}&expires=${expires}`;
     }
@@ -2992,6 +3170,8 @@ app.get('/c/:short', lookupRateLimiter, (req, res) => {
   }
 });
 
+let activeTunnel = null;
+
 async function startPublicTunnel() {
   if (process.env.DISABLE_TUNNEL === 'true' || process.env.PUBLIC_URL || process.env.RENDER) {
     return;
@@ -3002,6 +3182,7 @@ async function startPublicTunnel() {
       await install(bin);
     }
     const cfTunnel = Tunnel.quick(`http://localhost:${PORT}`);
+    activeTunnel = cfTunnel;
     cfTunnel.on('url', (url) => {
       cloudflareUrl = url;
       publicBaseUrl = url;
@@ -3009,14 +3190,6 @@ async function startPublicTunnel() {
     });
     cfTunnel.on('error', (err) => {
       console.error('Cloudflare tunnel error:', err.message);
-    });
-    process.on('SIGINT', () => {
-      cfTunnel.stop();
-      process.exit(0);
-    });
-    process.on('SIGTERM', () => {
-      cfTunnel.stop();
-      process.exit(0);
     });
   } catch (err) {
     console.error('Failed to start Cloudflare tunnel:', err.message);
@@ -3034,10 +3207,24 @@ app.use((err, req, res, next) => {
   res.status(status).json({ error: err.message || 'Internal server error' });
 });
 
+function handleGracefulShutdown() {
+  flushPendingDatabaseSave();
+  if (activeTunnel && typeof activeTunnel.stop === 'function') {
+    try {
+      activeTunnel.stop();
+    } catch {}
+    activeTunnel = null;
+  }
+  process.exit(0);
+}
+
 if (require.main === module) {
   try {
     fs.writeFileSync(PID_FILE, String(process.pid), 'utf8');
   } catch {}
+  process.on('SIGINT', handleGracefulShutdown);
+  process.on('SIGTERM', handleGracefulShutdown);
+  process.on('beforeExit', flushPendingDatabaseSave);
   loadDatabase();
   app.listen(PORT, () => {
     console.log(`sera.drop local server running at http://localhost:${PORT}`);
