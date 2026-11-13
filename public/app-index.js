@@ -18,10 +18,6 @@
   const uploadQueueSummary = document.getElementById('uploadQueueSummary');
   const clearCompletedQueueBtn = document.getElementById('clearCompletedQueueBtn');
 
-  const inlineError = document.getElementById('inlineError');
-  const inlineErrorText = document.getElementById('inlineErrorText');
-  const inlineErrorDismiss = document.getElementById('inlineErrorDismiss');
-
   const resultCard = document.getElementById('resultCard');
   const resultFileName = document.getElementById('resultFileName');
   const resultFileMeta = document.getElementById('resultFileMeta');
@@ -46,7 +42,6 @@
   const albumResultLink = document.getElementById('albumResultLink');
   const copyAlbumBtn = document.getElementById('copyAlbumBtn');
   const openAlbumBtn = document.getElementById('openAlbumBtn');
-  const toast = document.getElementById('toast');
 
   let currentLoadedFiles = [];
   const selectedForAlbum = new Set();
@@ -57,42 +52,12 @@
   let queueSeq = 0;
   let isProcessingQueue = false;
 
-  let toastTimer = null;
-  function showToast(msg) {
-    if (!toast) return;
-    toast.textContent = msg;
-    toast.classList.add('show');
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
-  }
-
-  function showInlineError(msg) {
-    if (!inlineError || !inlineErrorText) return;
-    inlineErrorText.textContent = msg;
-    inlineError.classList.add('active');
-  }
-
-  function clearInlineError() {
-    if (!inlineError || !inlineErrorText) return;
-    inlineErrorText.textContent = '';
-    inlineError.classList.remove('active');
-  }
-
-  if (inlineErrorDismiss) {
-    inlineErrorDismiss.addEventListener('click', clearInlineError);
-  }
+  const { showToast, showInlineError, clearInlineError, copyText } = window.SeraCommon.initUiFeedback();
+  const { formatBytes, escapeHtml, sanitizeUrl } = window.SeraCommon;
 
   const reportModalCtrl = window.SeraQR
     ? window.SeraQR.initReportModal({ showToast, showInlineError })
     : { openReportModal: function () {} };
-
-  function formatBytes(bytes) {
-    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  }
 
   function formatSpeed(bytesPerSec) {
     if (!bytesPerSec || !Number.isFinite(bytesPerSec) || bytesPerSec <= 0) return '';
@@ -139,15 +104,6 @@
     return 'FILE';
   }
 
-  function escapeHtml(str) {
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
-
   const OWNED_STORAGE_KEY = 'sera_drop_owned_files';
 
   function getOwnedFilesMap() {
@@ -171,28 +127,16 @@
     localStorage.setItem(OWNED_STORAGE_KEY, JSON.stringify(map));
   }
 
-  async function copyText(text, label = 'Link') {
-    try {
-      await navigator.clipboard.writeText(text);
-      showToast(`${label} copied`);
-    } catch {
-      const input = document.createElement('input');
-      input.value = text;
-      document.body.appendChild(input);
-      input.select();
-      document.execCommand('copy');
-      document.body.removeChild(input);
-      showToast(`${label} copied`);
-    }
-  }
-
   function bindCatboxClickBehavior(el, getUrl, label) {
     if (!el) return;
     el.addEventListener('click', () => copyText(getUrl(), label));
     el.addEventListener('auxclick', (e) => {
       if (e.button === 1) {
         e.preventDefault();
-        window.open(getUrl(), '_blank', 'noopener,noreferrer');
+        const safe = sanitizeUrl(getUrl());
+        if (safe !== '#') {
+          window.open(safe, '_blank', 'noopener,noreferrer');
+        }
       }
     });
   }
@@ -212,6 +156,77 @@
     });
   }
 
+  function createQueueRowElement(entry) {
+    const row = document.createElement('div');
+    row.className = 'queue-item';
+    row.setAttribute('data-queue-id', String(entry.id));
+    row.innerHTML = `
+      <div class="queue-item-header">
+        <div class="queue-item-title">
+          <span class="queue-item-name"></span>
+          <span class="queue-item-meta"></span>
+        </div>
+        <div class="queue-item-actions">
+          <span class="queue-status-pill"></span>
+          <button type="button" class="btn btn-danger btn-sm queue-cancel-btn hidden-el">Cancel</button>
+          <button type="button" class="btn btn-secondary btn-sm queue-retry-btn hidden-el">Retry</button>
+        </div>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill" style="width: 0%;"></div>
+      </div>
+    `;
+    const nameEl = row.querySelector('.queue-item-name');
+    if (nameEl) {
+      nameEl.textContent = entry.file.name;
+      nameEl.title = entry.file.name;
+    }
+    row.querySelector('.queue-cancel-btn').addEventListener('click', () => cancelQueueItem(entry.id));
+    row.querySelector('.queue-retry-btn').addEventListener('click', () => retryQueueItem(entry.id));
+    return row;
+  }
+
+  function syncQueueRow(row, entry) {
+    row.setAttribute('data-queue-status', entry.status.toLowerCase());
+    const statusBadgeClass =
+      entry.status === 'Done'
+        ? 'queue-status-done'
+        : entry.status === 'Failed' || entry.status === 'Cancelled'
+          ? 'queue-status-failed'
+          : entry.status === 'Uploading'
+            ? 'queue-status-uploading'
+            : 'queue-status-queued';
+    const pillEl = row.querySelector('.queue-status-pill');
+    if (pillEl) {
+      pillEl.className = `queue-status-pill ${statusBadgeClass}`;
+      pillEl.textContent = entry.status;
+    }
+
+    const telemetryParts = [formatBytes(entry.file.size)];
+    if (entry.status === 'Uploading') {
+      if (entry.speedText) telemetryParts.push(entry.speedText);
+      if (entry.etaText) telemetryParts.push(`ETA ${entry.etaText}`);
+    } else if (entry.errorMessage) {
+      telemetryParts.push(entry.errorMessage);
+    }
+    const metaEl = row.querySelector('.queue-item-meta');
+    if (metaEl) metaEl.textContent = telemetryParts.join(' · ');
+
+    const cancelBtn = row.querySelector('.queue-cancel-btn');
+    if (cancelBtn) {
+      cancelBtn.classList.toggle('hidden-el', entry.status !== 'Uploading' && entry.status !== 'Queued');
+    }
+    const retryBtn = row.querySelector('.queue-retry-btn');
+    if (retryBtn) {
+      retryBtn.classList.toggle('hidden-el', entry.status !== 'Failed' && entry.status !== 'Cancelled');
+    }
+
+    const fillEl = row.querySelector('.progress-fill');
+    if (fillEl) {
+      fillEl.style.width = `${Math.max(0, Math.min(100, entry.percent))}%`;
+    }
+  }
+
   function renderQueueDrawer() {
     if (!uploadQueueDrawer || !uploadQueueList) return;
     if (queueItems.length === 0) {
@@ -226,65 +241,20 @@
       uploadQueueSummary.textContent = `${doneCount} / ${queueItems.length} completed`;
     }
 
-    uploadQueueList.innerHTML = '';
+    const activeIds = new Set(queueItems.map((item) => String(item.id)));
+    Array.from(uploadQueueList.children).forEach((child) => {
+      if (!activeIds.has(child.getAttribute('data-queue-id'))) {
+        child.remove();
+      }
+    });
+
     queueItems.forEach((entry) => {
-      const row = document.createElement('div');
-      row.className = 'queue-item';
-      row.setAttribute('data-queue-id', String(entry.id));
-      row.setAttribute('data-queue-status', entry.status.toLowerCase());
-
-      const statusBadgeClass =
-        entry.status === 'Done'
-          ? 'queue-status-done'
-          : entry.status === 'Failed' || entry.status === 'Cancelled'
-            ? 'queue-status-failed'
-            : entry.status === 'Uploading'
-              ? 'queue-status-uploading'
-              : 'queue-status-queued';
-
-      const telemetryParts = [formatBytes(entry.file.size)];
-      if (entry.status === 'Uploading') {
-        if (entry.speedText) telemetryParts.push(entry.speedText);
-        if (entry.etaText) telemetryParts.push(`ETA ${entry.etaText}`);
-      } else if (entry.errorMessage) {
-        telemetryParts.push(entry.errorMessage);
+      let row = uploadQueueList.querySelector(`[data-queue-id="${entry.id}"]`);
+      if (!row) {
+        row = createQueueRowElement(entry);
+        uploadQueueList.appendChild(row);
       }
-
-      row.innerHTML = `
-        <div class="queue-item-header">
-          <div class="queue-item-title">
-            <span class="queue-item-name" title="${escapeHtml(entry.file.name)}">${escapeHtml(entry.file.name)}</span>
-            <span class="queue-item-meta">${escapeHtml(telemetryParts.join(' · '))}</span>
-          </div>
-          <div class="queue-item-actions">
-            <span class="queue-status-pill ${statusBadgeClass}">${escapeHtml(entry.status)}</span>
-            ${
-              entry.status === 'Uploading' || entry.status === 'Queued'
-                ? '<button type="button" class="btn btn-danger btn-sm queue-cancel-btn">Cancel</button>'
-                : ''
-            }
-            ${
-              entry.status === 'Failed' || entry.status === 'Cancelled'
-                ? '<button type="button" class="btn btn-secondary btn-sm queue-retry-btn">Retry</button>'
-                : ''
-            }
-          </div>
-        </div>
-        <div class="progress-track">
-          <div class="progress-fill" style="width: ${Math.max(0, Math.min(100, entry.percent))}%;"></div>
-        </div>
-      `;
-
-      const cancelBtn = row.querySelector('.queue-cancel-btn');
-      if (cancelBtn) {
-        cancelBtn.addEventListener('click', () => cancelQueueItem(entry.id));
-      }
-      const retryBtn = row.querySelector('.queue-retry-btn');
-      if (retryBtn) {
-        retryBtn.addEventListener('click', () => retryQueueItem(entry.id));
-      }
-
-      uploadQueueList.appendChild(row);
+      syncQueueRow(row, entry);
     });
   }
 
@@ -656,14 +626,22 @@
   copyDirectBtn.addEventListener('click', () => copyText(resultDirectUrl.value, 'Direct link'));
 
   async function createAlbum() {
+    const fileMap = new Map(currentLoadedFiles.map((f) => [f.code, f]));
     const codesToInclude =
       selectedForAlbum.size > 0
-        ? Array.from(selectedForAlbum)
-        : currentLoadedFiles.map((f) => f.code);
+        ? Array.from(selectedForAlbum).filter((c) => !fileMap.get(c)?.requireSignedUrl)
+        : currentLoadedFiles.filter((f) => !f.requireSignedUrl).map((f) => f.code);
 
     if (!codesToInclude.length) {
-      showToast('Select at least one file');
-      showInlineError('Upload or select at least one file to create an album.');
+      const hasSignedOnly =
+        selectedForAlbum.size > 0
+          ? Array.from(selectedForAlbum).length > 0
+          : currentLoadedFiles.length > 0;
+      const errMsg = hasSignedOnly
+        ? 'Signed-URL-only files cannot be added to albums. Upload or select a standard file.'
+        : 'Upload or select at least one file to create an album.';
+      showToast('Select at least one album-eligible file');
+      showInlineError(errMsg);
       return;
     }
 
@@ -710,26 +688,37 @@
 
   createAlbumBtn.addEventListener('click', createAlbum);
 
+  const deletingCodes = new Set();
+
   async function deleteFile(code) {
-    const owned = getOwnedFilesMap();
-    const token = owned[code] || '';
-    const headers = { 'X-Requested-With': 'sera.drop' };
-    if (token) {
-      headers['X-Delete-Token'] = token;
-    }
-    const res = await fetch(`/api/files/${encodeURIComponent(code)}`, {
-      method: 'DELETE',
-      headers
-    });
-    if (res.ok) {
-      removeOwnedFileToken(code);
-      selectedForAlbum.delete(code);
-      showToast('Deleted');
-      loadFiles();
-      checkPublicStatus();
-    } else {
-      showToast('Unauthorized');
-      showInlineError('Could not delete file: missing or invalid ownership token.');
+    if (deletingCodes.has(code)) return;
+    deletingCodes.add(code);
+    try {
+      const owned = getOwnedFilesMap();
+      const token = owned[code] || '';
+      const headers = { 'X-Requested-With': 'sera.drop' };
+      if (token) {
+        headers['X-Delete-Token'] = token;
+      }
+      const res = await fetch(`/api/files/${encodeURIComponent(code)}`, {
+        method: 'DELETE',
+        headers
+      });
+      if (res.ok) {
+        removeOwnedFileToken(code);
+        selectedForAlbum.delete(code);
+        showToast('Deleted');
+        loadFiles();
+        checkPublicStatus();
+      } else {
+        showToast('Unauthorized');
+        showInlineError('Could not delete file: missing or invalid ownership token.');
+      }
+    } catch {
+      showToast('Network error');
+      showInlineError('Network error while deleting file.');
+    } finally {
+      deletingCodes.delete(code);
     }
   }
 
@@ -749,19 +738,22 @@
       fileCountLabel.textContent = `${currentLoadedFiles.length}`;
 
       const returnedCodes = new Set(currentLoadedFiles.map((f) => f.code));
+      const ownedMap = getOwnedFilesMap();
+      let ownedMapDirty = false;
       for (const f of currentLoadedFiles) {
-        if (f.code) {
-          const map = getOwnedFilesMap();
-          if (map[f.code] === undefined) {
-            map[f.code] = '';
-            localStorage.setItem(OWNED_STORAGE_KEY, JSON.stringify(map));
-          }
+        if (f.code && ownedMap[f.code] === undefined) {
+          ownedMap[f.code] = '';
+          ownedMapDirty = true;
         }
       }
       for (const code of ownedCodes.slice(0, 100)) {
-        if (!returnedCodes.has(code)) {
-          removeOwnedFileToken(code);
+        if (!returnedCodes.has(code) && Object.prototype.hasOwnProperty.call(ownedMap, code)) {
+          delete ownedMap[code];
+          ownedMapDirty = true;
         }
+      }
+      if (ownedMapDirty) {
+        localStorage.setItem(OWNED_STORAGE_KEY, JSON.stringify(ownedMap));
       }
 
       if (currentLoadedFiles.length === 0) {
@@ -776,7 +768,7 @@
         const rawBadge = getExtBadge(f.originalName);
         const safeBadge = escapeHtml(rawBadge);
         const safeCode = escapeHtml(f.code);
-        const safeShareHref = escapeHtml(f.shortUrl || ('/s/' + encodeURIComponent(f.code)));
+        const safeShareHref = escapeHtml(sanitizeUrl(f.shortUrl || ('/s/' + encodeURIComponent(f.code))));
         const isExec = execExts.has(rawBadge);
         const warnTag = isExec ? `<span class="tag-warn">Executable</span>` : '';
         const dedupeTag = f.deduplicated ? `<span class="tag-mono">Dedupe</span>` : '';
@@ -862,9 +854,12 @@
       const isLocalHost =
         window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
       if (data.publicUrl && isLocalHost && badge) {
-        badge.href = data.publicUrl;
-        badge.textContent = data.publicUrl.replace(/^https?:\/\//, '');
-        badge.classList.remove('hidden-el');
+        const safePublicUrl = sanitizeUrl(data.publicUrl);
+        if (safePublicUrl !== '#') {
+          badge.href = safePublicUrl;
+          badge.textContent = safePublicUrl.replace(/^https?:\/\//, '');
+          badge.classList.remove('hidden-el');
+        }
       } else if (!data.publicUrl && data.tunnelEnabled && statusPollAttempts < 15) {
         statusPollAttempts += 1;
         setTimeout(checkPublicStatus, 2000);

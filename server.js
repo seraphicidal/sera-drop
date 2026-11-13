@@ -2,15 +2,6 @@ const express = require('express');
 const multer = require('multer');
 const QRCode = require('qrcode');
 const { bin, install, Tunnel } = require('cloudflared');
-let fileTypeModulePromise = null;
-
-async function detectFileTypeFromBuffer(buffer) {
-  if (!fileTypeModulePromise) {
-    fileTypeModulePromise = import('file-type');
-  }
-  const mod = await fileTypeModulePromise;
-  return mod.fileTypeFromBuffer(buffer);
-}
 const crypto = require('crypto');
 const dns = require('dns');
 const http = require('http');
@@ -18,6 +9,24 @@ const https = require('https');
 const net = require('net');
 const path = require('path');
 const fs = require('fs');
+const { normalizeIp, parseIpv6Words, isPrivateOrReservedIp } = require('./src/ip-safety');
+const { createRateLimiter } = require('./src/rate-limiter');
+const { createUpstreamProxyMiddleware } = require('./src/upstream-proxy');
+const {
+  MAX_FILE_SIZE_BYTES,
+  MAX_TOTAL_STORAGE_BYTES,
+  MIME_BY_EXT,
+  decodeOriginalName,
+  getSafeExtension,
+  sanitizeUploadFilename,
+  buildContentDisposition,
+  isExecutableBinaryFile,
+  validateUploadPolicy,
+  formatBytes,
+  detectPreviewCategory,
+  resolveRawMediaDelivery,
+  getDirectFileExt
+} = require('./src/upload-policy');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -64,9 +73,6 @@ const ALBUM_HTML_PATH = path.join(PUBLIC_DIR, 'album.html');
 const SHARE_HTML_TEMPLATE = fs.readFileSync(SHARE_HTML_PATH, 'utf8');
 const ALBUM_HTML_TEMPLATE = fs.readFileSync(ALBUM_HTML_PATH, 'utf8');
 
-const MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024;
-const MAX_GIF_SIZE_BYTES = 50 * 1024 * 1024;
-const MAX_TOTAL_STORAGE_BYTES = 5 * 1024 * 1024 * 1024;
 const CLIENT_COOKIE_NAME = 'sera_cid';
 function getClientStorageQuota() {
   return process.env.MAX_CLIENT_STORAGE_BYTES
@@ -74,6 +80,8 @@ function getClientStorageQuota() {
     : 2 * 1024 * 1024 * 1024;
 }
 const MAX_CONCURRENT_UPLOADS = 5;
+const MAX_FILES_PER_CLIENT = 1000;
+const MAX_STORED_REPORTS = 1000;
 const SIGNED_URL_TTL_SECONDS = 240;
 
 const TTL_PRESETS_MS = {
@@ -81,96 +89,6 @@ const TTL_PRESETS_MS = {
   '12h': 12 * 60 * 60 * 1000,
   '24h': 24 * 60 * 60 * 1000,
   '72h': 72 * 60 * 60 * 1000
-};
-
-const BLOCKED_PUBLIC_EXTENSIONS = new Set([
-  '.exe', '.scr', '.cpl', '.jar', '.msi', '.msp', '.mst', '.bat', '.cmd', '.com',
-  '.vbs', '.vbe', '.wsf', '.wsh', '.hta', '.reg', '.dll', '.sys', '.drv', '.pif',
-  '.gadget', '.application', '.lnk', '.htaccess', '.php', '.phtml', '.phar', '.asp', '.aspx', '.jsp',
-  '.elf', '.bin', '.run', '.dylib', '.so', '.ps1', '.psm1', '.psd1', '.apk', '.appx', '.msix', '.cpl'
-]);
-
-const BLOCKED_PUBLIC_MIMES = new Set([
-  'application/x-msdownload',
-  'application/exe',
-  'application/x-dosexec',
-  'application/x-msdos-program',
-  'application/x-ms-shortcut',
-  'application/x-msi',
-  'application/hta',
-  'application/x-executable',
-  'application/x-elf',
-  'application/x-mach-binary'
-]);
-
-const BLOCKED_DETECTED_EXTENSIONS = new Set([
-  'exe', 'dll', 'elf', 'mach-o', 'msi', 'com', 'scr'
-]);
-
-const BLOCKED_DETECTED_MIMES = new Set([
-  'application/x-msdownload',
-  'application/x-executable',
-  'application/x-elf',
-  'application/x-mach-binary',
-  'application/x-dosexec'
-]);
-
-const XSS_SENSITIVE_EXTENSIONS = new Set([
-  '.html', '.htm', '.xhtml', '.shtml', '.svg', '.svgz', '.xml', '.xsl', '.xslt',
-  '.php', '.phtml', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.vue',
-  '.htaccess', '.mht', '.mhtml', '.swf'
-]);
-
-const SAFE_INLINE_MEDIA_MIMES = new Set([
-  'image/jpeg',
-  'image/png',
-  'image/gif',
-  'image/webp',
-  'image/avif',
-  'image/bmp',
-  'image/x-icon',
-  'video/mp4',
-  'video/webm',
-  'video/ogg',
-  'video/quicktime',
-  'video/x-matroska',
-  'video/x-m4v',
-  'video/x-msvideo',
-  'audio/mpeg',
-  'audio/mp3',
-  'audio/ogg',
-  'audio/wav',
-  'audio/x-wav',
-  'audio/webm',
-  'audio/flac',
-  'audio/aac',
-  'audio/mp4',
-  'application/pdf'
-]);
-
-const MIME_BY_EXT = {
-  '.mp4': 'video/mp4',
-  '.m4v': 'video/mp4',
-  '.webm': 'video/webm',
-  '.mov': 'video/quicktime',
-  '.ogv': 'video/ogg',
-  '.ogg': 'video/ogg',
-  '.mkv': 'video/x-matroska',
-  '.avi': 'video/x-msvideo',
-  '.mp3': 'audio/mpeg',
-  '.wav': 'audio/wav',
-  '.flac': 'audio/flac',
-  '.aac': 'audio/aac',
-  '.m4a': 'audio/mp4',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.avif': 'image/avif',
-  '.bmp': 'image/bmp',
-  '.ico': 'image/x-icon',
-  '.pdf': 'application/pdf'
 };
 
 const VALID_REPORT_CATEGORIES = new Set([
@@ -183,6 +101,7 @@ const VALID_REPORT_CATEGORIES = new Set([
 
 let activeUploads = 0;
 let activeUploadBytes = 0;
+const clientActiveUploadBytes = new Map();
 let cloudflareUrl = null;
 let publicBaseUrl = process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || null;
 
@@ -223,94 +142,6 @@ function loadOrCreateSecret() {
 
 const SECURE_LINK_SECRET = loadOrCreateSecret();
 
-let cachedUpstreamRaw = null;
-let cachedUpstreamBase = null;
-
-app.use((req, res, next) => {
-  const upstreamTarget = process.env.UPSTREAM_URL ? process.env.UPSTREAM_URL.trim().replace(/\/+$/, '') : null;
-  if (!upstreamTarget) {
-    return next();
-  }
-
-  if (upstreamTarget !== cachedUpstreamRaw) {
-    cachedUpstreamBase = new URL(upstreamTarget);
-    cachedUpstreamRaw = upstreamTarget;
-  }
-  const upstreamBase = cachedUpstreamBase;
-  const rawUrl = String(req.url || '/');
-  if (rawUrl.startsWith('//') || rawUrl.startsWith('/\\') || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rawUrl)) {
-    return res.status(400).json({ error: 'Invalid request target.' });
-  }
-  const safePath = '/' + rawUrl.replace(/^[\/\\]+/, '');
-  const targetUrl = new URL(safePath, upstreamBase);
-  if (targetUrl.origin !== upstreamBase.origin) {
-    return res.status(400).json({ error: 'Invalid request target.' });
-  }
-  const isHttps = upstreamBase.protocol === 'https:';
-  const transport = isHttps ? https : http;
-
-  const resolvedIncomingIp = getClientIp(req);
-  const incomingClientIp =
-    resolvedIncomingIp !== 'unknown'
-      ? resolvedIncomingIp
-      : String(req.socket.remoteAddress || '').replace(/^::ffff:/i, '');
-
-  const headers = { ...req.headers };
-  headers.host = upstreamBase.host;
-  headers['x-real-ip'] = incomingClientIp;
-  headers['x-forwarded-host'] = req.headers.host || '';
-  headers['x-forwarded-proto'] = req.protocol || 'https';
-  headers['x-forwarded-for'] = req.headers['x-forwarded-for']
-    ? `${req.headers['x-forwarded-for']}, ${req.socket.remoteAddress}`
-    : req.socket.remoteAddress;
-
-  const proxyReq = transport.request(
-    targetUrl,
-    {
-      method: req.method,
-      headers,
-      timeout: 1800000
-    },
-    (proxyRes) => {
-      const responseHeaders = { ...proxyRes.headers };
-      delete responseHeaders['connection'];
-      delete responseHeaders['transfer-encoding'];
-      delete responseHeaders['keep-alive'];
-      res.writeHead(proxyRes.statusCode, responseHeaders);
-      proxyRes.pipe(res);
-    }
-  );
-
-  proxyReq.on('timeout', () => {
-    proxyReq.destroy(new Error('Gateway Timeout'));
-  });
-
-  proxyReq.on('error', (err) => {
-    if (!res.headersSent) {
-      const isTimeout = err && err.message === 'Gateway Timeout';
-      res.status(isTimeout ? 504 : 502).json({
-        error: isTimeout
-          ? 'Gateway Timeout: upstream server did not respond in time.'
-          : 'Bad Gateway: failed to connect to upstream server.'
-      });
-    }
-  });
-
-  res.on('close', () => {
-    if (!res.writableEnded && !proxyReq.destroyed) {
-      proxyReq.destroy();
-    }
-  });
-
-  req.on('aborted', () => {
-    if (!proxyReq.destroyed) {
-      proxyReq.destroy();
-    }
-  });
-
-  req.pipe(proxyReq);
-});
-
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
@@ -321,11 +152,13 @@ app.use((req, res, next) => {
     'Content-Security-Policy',
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
   );
-  if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
+  if (req.secure) {
     res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
   }
   next();
 });
+
+app.use(createUpstreamProxyMiddleware({ getClientIp }));
 
 function parseCookies(cookieHeader) {
   const cookies = {};
@@ -367,10 +200,7 @@ app.use((req, res, next) => {
   }
 
   if (isNew) {
-    const isHttps =
-      req.protocol === 'https' ||
-      req.headers['x-forwarded-proto'] === 'https' ||
-      process.env.NODE_ENV === 'production';
+    const isHttps = req.secure || process.env.NODE_ENV === 'production';
     const secureFlag = isHttps ? '; Secure' : '';
     res.setHeader(
       'Set-Cookie',
@@ -380,28 +210,34 @@ app.use((req, res, next) => {
   next();
 });
 
-function normalizeIp(rawIp) {
-  if (typeof rawIp !== 'string') return '';
-  const trimmed = rawIp.trim();
-  return trimmed.replace(/^::ffff:/i, '');
-}
-
 function getClientIp(req) {
   if (process.env.TRUST_CF_HEADERS === 'true') {
     const peerIp = normalizeIp(req.socket?.remoteAddress || '');
     if (peerIp && isPrivateOrReservedIp(peerIp)) {
       const cfHeader = req.headers['cf-connecting-ip'];
-      if (typeof cfHeader === 'string' && net.isIP(cfHeader.trim())) {
-        return cfHeader.trim();
+      const cleanCf = normalizeIp(cfHeader);
+      if (cleanCf && net.isIP(cleanCf)) {
+        return cleanCf;
       }
     }
   }
-  const candidate = req.ip;
-  if (typeof candidate === 'string' && candidate.trim()) {
-    const clean = candidate.startsWith('::ffff:') ? candidate.slice(7) : candidate;
-    if (net.isIP(clean)) return clean;
+  const candidate = normalizeIp(req.ip || '');
+  if (candidate && net.isIP(candidate)) {
+    return candidate;
   }
-  return req.socket?.remoteAddress || 'unknown';
+  const socketIp = normalizeIp(req.socket?.remoteAddress || '');
+  return socketIp || 'unknown';
+}
+
+function getRateLimitKey(req) {
+  const ip = getClientIp(req);
+  if (net.isIPv6(ip)) {
+    const words = parseIpv6Words(ip);
+    if (words) {
+      return `v6:${words[0].toString(16)}:${words[1].toString(16)}:${words[2].toString(16)}:${words[3].toString(16)}::/64`;
+    }
+  }
+  return ip;
 }
 
 function hashClientIp(req) {
@@ -411,50 +247,30 @@ function hashClientIp(req) {
     .digest('hex');
 }
 
-function createRateLimiter({ windowMs, maxRequests, message }) {
-  const buckets = new Map();
-  return (req, res, next) => {
-    const ip = getClientIp(req);
-    const now = Date.now();
-
-    if (buckets.size > 2000) {
-      for (const [k, v] of buckets.entries()) {
-        if (now > v.resetAt) buckets.delete(k);
-      }
-      if (buckets.size > 5000) {
-        buckets.clear();
-      }
-    }
-
-    let bucket = buckets.get(ip);
-    if (!bucket || now > bucket.resetAt) {
-      bucket = { count: 0, resetAt: now + windowMs };
-      buckets.set(ip, bucket);
-    }
-    bucket.count += 1;
-    if (bucket.count > maxRequests) {
-      return res.status(429).json({ error: message || 'Too many requests, please try again later.' });
-    }
-    next();
-  };
+function getEffectiveIpHash(req) {
+  const rawIp = getClientIp(req);
+  return ['127.0.0.1', '::1', 'unknown'].includes(rawIp) ? null : hashClientIp(req);
 }
 
 const uploadRateLimiter = createRateLimiter({
   windowMs: 10 * 60 * 1000,
   maxRequests: process.env.NODE_ENV === 'test' ? 2000 : 40,
-  message: 'Upload rate limit exceeded. Please wait a few minutes.'
+  message: 'Upload rate limit exceeded. Please wait a few minutes.',
+  getKey: getRateLimitKey
 });
 
 const lookupRateLimiter = createRateLimiter({
   windowMs: 60 * 1000,
   maxRequests: process.env.NODE_ENV === 'test' ? 5000 : 180,
-  message: 'Too many requests. Please slow down.'
+  message: 'Too many requests. Please slow down.',
+  getKey: getRateLimitKey
 });
 
 const reportRateLimiter = createRateLimiter({
   windowMs: 10 * 60 * 1000,
   maxRequests: process.env.NODE_ENV === 'test' ? 1000 : 20,
-  message: 'Too many abuse reports submitted. Please try again later.'
+  message: 'Too many abuse reports submitted. Please try again later.',
+  getKey: getRateLimitKey
 });
 
 function requireCsrfHeader(req, res, next) {
@@ -511,7 +327,78 @@ let memoryDbStat = null;
 let pendingDbToSave = null;
 let dbWriteSeq = 0;
 let sidecarIndexMap = null;
-let sidecarIndexBuiltAt = 0;
+let sidecarIndexDirMtimeMs = 0;
+let sha256Index = null;
+
+function rebuildSha256Index(db) {
+  const next = new Map();
+  if (db && typeof db === 'object') {
+    for (const [code, rec] of Object.entries(db)) {
+      if (rec && typeof rec.sha256 === 'string' && rec.sha256) {
+        let bucket = next.get(rec.sha256);
+        if (!bucket) {
+          bucket = new Set();
+          next.set(rec.sha256, bucket);
+        }
+        bucket.add(code);
+      }
+    }
+  }
+  sha256Index = next;
+}
+
+function indexDbRecord(rec) {
+  if (!rec || !rec.code || !rec.sha256) return;
+  if (!sha256Index) {
+    sha256Index = new Map();
+  }
+  let bucket = sha256Index.get(rec.sha256);
+  if (!bucket) {
+    bucket = new Set();
+    sha256Index.set(rec.sha256, bucket);
+  }
+  bucket.add(rec.code);
+}
+
+function unindexDbRecord(rec) {
+  if (!sha256Index || !rec || !rec.code || !rec.sha256) return;
+  const bucket = sha256Index.get(rec.sha256);
+  if (bucket) {
+    bucket.delete(rec.code);
+    if (bucket.size === 0) {
+      sha256Index.delete(rec.sha256);
+    }
+  }
+}
+
+function findReusableRecordBySha256(db, sha256, size) {
+  if (!sha256Index) {
+    rebuildSha256Index(db);
+  }
+  const codes = sha256Index.get(sha256);
+  if (!codes) return null;
+  const now = Date.now();
+  for (const code of codes) {
+    const existing = db[code];
+    if (
+      existing &&
+      !isExpired(existing, now) &&
+      existing.sha256 === sha256 &&
+      existing.size === size &&
+      existing.storedName &&
+      fs.existsSync(path.join(UPLOADS_DIR, path.basename(existing.storedName)))
+    ) {
+      return existing;
+    }
+    if (!existing || isExpired(existing, now) || existing.sha256 !== sha256) {
+      codes.delete(code);
+    }
+  }
+  if (codes.size === 0) {
+    sha256Index.delete(sha256);
+  }
+  return null;
+}
 
 function readFileStatSafe(filePath) {
   try {
@@ -520,6 +407,10 @@ function readFileStatSafe(filePath) {
   } catch {
     return null;
   }
+}
+
+function statsMatch(a, b) {
+  return Boolean(a && b && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ino === b.ino);
 }
 
 function flushPendingDatabaseSave() {
@@ -545,6 +436,8 @@ function saveRecordSidecar(record) {
     fs.renameSync(tmpFile, metaPath);
     if (sidecarIndexMap) {
       sidecarIndexMap.set(record.code, metaFilename);
+      const dirStat = readFileStatSafe(UPLOADS_DIR);
+      if (dirStat) sidecarIndexDirMtimeMs = dirStat.mtimeMs;
     }
   } catch {}
 }
@@ -559,6 +452,10 @@ function deleteRecordSidecar(storedName, code) {
     safeUnlink(path.join(UPLOADS_DIR, `${base}.${code}.meta.json`));
   }
   safeUnlink(path.join(UPLOADS_DIR, `${base}.meta.json`));
+  if (sidecarIndexMap) {
+    const dirStat = readFileStatSafe(UPLOADS_DIR);
+    if (dirStat) sidecarIndexDirMtimeMs = dirStat.mtimeMs;
+  }
 }
 
 function deleteStoredFile(storedName, code = null) {
@@ -566,6 +463,18 @@ function deleteStoredFile(storedName, code = null) {
   const base = path.basename(storedName);
   deleteRecordSidecar(base, code);
   safeUnlink(path.join(UPLOADS_DIR, base));
+}
+
+function removeRecordAndOrphanedFile(db, record) {
+  if (!db || !record || !record.code) return;
+  const code = record.code;
+  const storedName = record.storedName;
+  delete db[code];
+  unindexDbRecord(record);
+  deleteRecordSidecar(storedName, code);
+  if (storedName && !isStoredFileReferenced(db, storedName, code)) {
+    safeUnlink(path.join(UPLOADS_DIR, path.basename(storedName)));
+  }
 }
 
 function recoverDatabaseFromSidecars(currentDb) {
@@ -595,7 +504,8 @@ function recoverDatabaseFromSidecars(currentDb) {
         } catch {}
       }
       sidecarIndexMap = nextIndex;
-      sidecarIndexBuiltAt = Date.now();
+      const dirStat = readFileStatSafe(UPLOADS_DIR);
+      sidecarIndexDirMtimeMs = dirStat ? dirStat.mtimeMs : 0;
     }
   } catch {}
   if (restored) {
@@ -621,8 +531,9 @@ function findSidecarByCode(code) {
     return null;
   }
   try {
-    const now = Date.now();
-    if (sidecarIndexMap === null || (!sidecarIndexMap.has(code) && now - sidecarIndexBuiltAt > 15000)) {
+    const dirStat = readFileStatSafe(UPLOADS_DIR);
+    const dirMtime = dirStat ? dirStat.mtimeMs : 0;
+    if (sidecarIndexMap === null || (!sidecarIndexMap.has(code) && dirMtime !== sidecarIndexDirMtimeMs)) {
       const nextIndex = new Map();
       if (fs.existsSync(UPLOADS_DIR)) {
         const diskFiles = fs.readdirSync(UPLOADS_DIR);
@@ -634,7 +545,7 @@ function findSidecarByCode(code) {
         }
       }
       sidecarIndexMap = nextIndex;
-      sidecarIndexBuiltAt = now;
+      sidecarIndexDirMtimeMs = dirMtime;
     }
     const targetFile = sidecarIndexMap.get(code);
     if (!targetFile) {
@@ -661,13 +572,7 @@ function loadDatabase() {
   try {
     if (memoryDbCache !== null) {
       const diskStat = readFileStatSafe(DB_FILE);
-      if (
-        diskStat &&
-        memoryDbStat &&
-        diskStat.size === memoryDbStat.size &&
-        diskStat.mtimeMs === memoryDbStat.mtimeMs &&
-        diskStat.ino === memoryDbStat.ino
-      ) {
+      if (statsMatch(diskStat, memoryDbStat)) {
         return memoryDbCache;
       }
     }
@@ -708,6 +613,7 @@ function loadDatabase() {
     }
     memoryDbCache = parsed;
     memoryDbStat = readFileStatSafe(DB_FILE);
+    rebuildSha256Index(parsed);
     return parsed;
   } catch {
     if (memoryDbCache !== null) {
@@ -719,7 +625,7 @@ function loadDatabase() {
 
 function saveDatabase(db, options = {}) {
   if (!db || typeof db !== 'object') return;
-  const { syncSidecars = true } = options;
+  const { syncSidecars = false } = options;
   dbWriteSeq += 1;
   pendingDbToSave = null;
   if (saveDbTimeout) {
@@ -727,6 +633,9 @@ function saveDatabase(db, options = {}) {
     saveDbTimeout = null;
   }
   memoryDbCache = db;
+  if (!sha256Index) {
+    rebuildSha256Index(db);
+  }
   try {
     const tmpFile = `${DB_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
     fs.writeFileSync(tmpFile, JSON.stringify(db, null, 2), 'utf8');
@@ -774,9 +683,15 @@ function scheduleDatabaseSave(db = memoryDbCache) {
 }
 
 let memoryAlbumsCache = null;
+let memoryAlbumsStat = null;
 
 function loadAlbums() {
   try {
+    const diskStat = readFileStatSafe(ALBUMS_FILE);
+    if (memoryAlbumsCache !== null && statsMatch(diskStat, memoryAlbumsStat)) {
+      return memoryAlbumsCache;
+    }
+
     let parsed = null;
     if (fs.existsSync(ALBUMS_FILE)) {
       try {
@@ -798,6 +713,7 @@ function loadAlbums() {
       parsed = memoryAlbumsCache ? { ...memoryAlbumsCache } : {};
     }
     memoryAlbumsCache = parsed;
+    memoryAlbumsStat = readFileStatSafe(ALBUMS_FILE);
     return parsed;
   } catch {
     if (memoryAlbumsCache !== null) {
@@ -814,39 +730,67 @@ function saveAlbums(albums) {
     const tmpFile = `${ALBUMS_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
     fs.writeFileSync(tmpFile, JSON.stringify(albums, null, 2), 'utf8');
     fs.renameSync(tmpFile, ALBUMS_FILE);
+    memoryAlbumsStat = readFileStatSafe(ALBUMS_FILE);
     try {
       fs.copyFileSync(ALBUMS_FILE, ALBUMS_BACKUP_FILE);
     } catch {}
   } catch {}
 }
 
+let memoryReportsCache = null;
+let memoryReportsStat = null;
+
 function loadReports() {
   try {
+    const diskStat = readFileStatSafe(REPORTS_FILE);
+    if (memoryReportsCache !== null && statsMatch(diskStat, memoryReportsStat)) {
+      return memoryReportsCache;
+    }
+    if (!diskStat) {
+      memoryReportsCache = [];
+      memoryReportsStat = null;
+      return memoryReportsCache;
+    }
     const raw = fs.readFileSync(REPORTS_FILE, 'utf8');
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    memoryReportsCache = Array.isArray(parsed) ? parsed : [];
+    memoryReportsStat = diskStat;
+    return memoryReportsCache;
   } catch {
+    if (memoryReportsCache !== null) {
+      return memoryReportsCache;
+    }
     return [];
   }
 }
 
 function saveReports(reports) {
+  const bounded = Array.isArray(reports) ? reports.slice(-MAX_STORED_REPORTS) : [];
+  memoryReportsCache = bounded;
   const tmpFile = `${REPORTS_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-  fs.writeFileSync(tmpFile, JSON.stringify(reports, null, 2), 'utf8');
+  fs.writeFileSync(tmpFile, JSON.stringify(bounded, null, 2), 'utf8');
   fs.renameSync(tmpFile, REPORTS_FILE);
+  memoryReportsStat = readFileStatSafe(REPORTS_FILE);
 }
 
 let memoryBlockedCache = null;
+let memoryBlockedStat = null;
 
 function loadBlockedHashes() {
   try {
-    if (!fs.existsSync(BLOCKED_HASHES_FILE)) {
+    const diskStat = readFileStatSafe(BLOCKED_HASHES_FILE);
+    if (!diskStat) {
       memoryBlockedCache = {};
-      return {};
+      memoryBlockedStat = null;
+      return memoryBlockedCache;
+    }
+    if (memoryBlockedCache !== null && statsMatch(diskStat, memoryBlockedStat)) {
+      return memoryBlockedCache;
     }
     const raw = fs.readFileSync(BLOCKED_HASHES_FILE, 'utf8');
     const parsed = sanitizeMapObject(JSON.parse(raw));
     memoryBlockedCache = parsed;
+    memoryBlockedStat = diskStat;
     return parsed;
   } catch {
     if (memoryBlockedCache !== null) {
@@ -861,6 +805,7 @@ function saveBlockedHashes(blocked) {
   const tmpFile = `${BLOCKED_HASHES_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   fs.writeFileSync(tmpFile, JSON.stringify(blocked, null, 2), 'utf8');
   fs.renameSync(tmpFile, BLOCKED_HASHES_FILE);
+  memoryBlockedStat = readFileStatSafe(BLOCKED_HASHES_FILE);
 }
 
 function safeUnlink(filePath) {
@@ -888,6 +833,33 @@ function isExpired(record, now = Date.now()) {
   return Number.isFinite(expireTime) && expireTime <= now;
 }
 
+function cleanupOrphanTempFiles(maxAgeMs = 2 * 60 * 60 * 1000) {
+  try {
+    const db = loadDatabase();
+    const referenced = new Set();
+    for (const r of Object.values(db)) {
+      if (r && r.storedName) {
+        referenced.add(path.basename(r.storedName));
+      }
+    }
+    const cutoff = Date.now() - maxAgeMs;
+    const entries = fs.readdirSync(UPLOADS_DIR, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const name = entry.name;
+      if (referenced.has(name)) continue;
+      if (!name.endsWith('.bin') && !name.endsWith('.tmp')) continue;
+      const fullPath = path.join(UPLOADS_DIR, name);
+      const st = fs.statSync(fullPath);
+      if (st.mtimeMs <= cutoff) {
+        safeUnlink(fullPath);
+      }
+    }
+  } catch {}
+}
+
+let lastOrphanSweepMs = 0;
+
 function reapExpiredFiles() {
   try {
     const db = loadDatabase();
@@ -896,18 +868,18 @@ function reapExpiredFiles() {
 
     for (const [code, rec] of Object.entries(db)) {
       if (rec && isExpired(rec, now)) {
-        const storedName = rec.storedName;
-        delete db[code];
-        deleteRecordSidecar(storedName, code);
+        removeRecordAndOrphanedFile(db, rec);
         changed = true;
-        if (storedName && !isStoredFileReferenced(db, storedName, code)) {
-          safeUnlink(path.join(UPLOADS_DIR, path.basename(storedName)));
-        }
       }
     }
 
     if (changed) {
       saveDatabase(db);
+    }
+
+    if (now - lastOrphanSweepMs > 30 * 60 * 1000) {
+      lastOrphanSweepMs = now;
+      cleanupOrphanTempFiles();
     }
   } catch (err) {
     console.error('TTL reaper error:', err.message);
@@ -928,6 +900,7 @@ function getRecordByCode(db, rawCode) {
     const recovered = findSidecarByCode(code);
     if (recovered) {
       db[code] = recovered;
+      indexDbRecord(recovered);
       saveDatabase(db);
       record = recovered;
     } else {
@@ -1042,6 +1015,47 @@ function getTotalStorageUsed(db) {
   return total;
 }
 
+function getClientActiveKey(req, customHashOverride = null) {
+  return String(
+    customHashOverride ||
+      req.customClientHash ||
+      req.clientIdHash ||
+      getEffectiveIpHash(req) ||
+      'anon'
+  );
+}
+
+function getClientActiveBytes(key) {
+  return clientActiveUploadBytes.get(key) || 0;
+}
+
+function adjustClientActiveBytes(key, delta) {
+  const next = Math.max(0, (clientActiveUploadBytes.get(key) || 0) + delta);
+  if (next === 0) {
+    clientActiveUploadBytes.delete(key);
+  } else {
+    clientActiveUploadBytes.set(key, next);
+  }
+}
+
+function countClientActiveFiles(db, clientIdHash, customClientHash = null, ipHash = null) {
+  if (!clientIdHash && !customClientHash && !ipHash) return 0;
+  const now = Date.now();
+  let count = 0;
+  for (const r of Object.values(db)) {
+    if (!r || isExpired(r, now)) continue;
+    const matchClient = Boolean(clientIdHash && r.clientIdHash === clientIdHash);
+    const matchCustom = Boolean(
+      customClientHash && (r.userhash === customClientHash || r.clientIdHash === customClientHash)
+    );
+    const matchIp = Boolean(ipHash && r.ipHash === ipHash);
+    if (matchClient || matchCustom || matchIp) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function getClientStorageUsed(db, clientIdHash, customClientHash = null, ipHash = null) {
   if (!clientIdHash && !customClientHash && !ipHash) return 0;
   const seenStoredNames = new Set();
@@ -1064,167 +1078,80 @@ function getClientStorageUsed(db, clientIdHash, customClientHash = null, ipHash 
   return total;
 }
 
-function decodeOriginalName(rawName) {
-  if (typeof rawName !== 'string') return 'unnamed';
-  if (/[^\x00-\xFF]/.test(rawName)) return rawName;
-  try {
-    const decoded = Buffer.from(rawName, 'latin1').toString('utf8');
-    if (!decoded.includes('\uFFFD')) return decoded;
-  } catch {}
-  return rawName;
+function safeUnlinkStreamTarget(stream, filePath) {
+  if (stream && !stream.destroyed) {
+    stream.once('close', () => safeUnlink(filePath));
+    stream.destroy();
+  }
+  safeUnlink(filePath);
 }
 
-function getSafeExtension(filename) {
-  const ext = path.extname(filename || '').toLowerCase().trim();
-  if (/^\.[a-z0-9]{1,10}$/.test(ext)) {
-    return ext;
-  }
-  return '';
-}
-
-function buildContentDisposition(dispositionType, filename) {
-  const clean = String(filename || 'file').replace(/[\r\n"\\]/g, '_');
-  const asciiFallback = clean.replace(/[^\x20-\x7e]/g, '_') || 'file';
-  const encoded = encodeURIComponent(clean);
-  return `${dispositionType}; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
-}
-
-function hasExecutableMagicHeader(buffer) {
-  if (!Buffer.isBuffer(buffer) || buffer.length < 2) return false;
-  if (buffer[0] === 0x4d && buffer[1] === 0x5a) {
-    return true;
-  }
-  if (
-    buffer.length >= 4 &&
-    buffer[0] === 0x7f &&
-    buffer[1] === 0x45 &&
-    buffer[2] === 0x4c &&
-    buffer[3] === 0x46
-  ) {
-    return true;
-  }
-  if (buffer.length >= 4) {
-    const magic32 = buffer.readUInt32BE(0);
-    if (
-      magic32 === 0xfeedface ||
-      magic32 === 0xfeedfacf ||
-      magic32 === 0xcefaedfe ||
-      magic32 === 0xcffaedfe ||
-      magic32 === 0xcafebabe
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-async function isExecutableBinaryFile(filePath) {
-  const fd = await fs.promises.open(filePath, 'r');
-  let headerBuf;
-  try {
-    headerBuf = Buffer.alloc(4100);
-    const { bytesRead } = await fd.read(headerBuf, 0, headerBuf.length, 0);
-    headerBuf = headerBuf.subarray(0, bytesRead);
-  } finally {
-    await fd.close();
-  }
-
-  if (hasExecutableMagicHeader(headerBuf)) {
-    return true;
-  }
-
-  try {
-    const detected = await detectFileTypeFromBuffer(headerBuf);
-    if (detected) {
-      const ext = String(detected.ext || '').toLowerCase();
-      const mime = String(detected.mime || '').toLowerCase();
-      if (BLOCKED_DETECTED_EXTENSIONS.has(ext) || BLOCKED_DETECTED_MIMES.has(mime)) {
-        return true;
-      }
-    }
-  } catch {}
-
-  return false;
-}
-
-function validateUploadPolicy({ originalName, mimeType, size }) {
-  if (!Number.isFinite(size) || size <= 0) {
-    return 'File is empty.';
-  }
-  const ext = getSafeExtension(originalName);
-  const lowerName = (originalName || '').toLowerCase();
-  const lowerMime = (mimeType || '').toLowerCase();
-
-  if (BLOCKED_PUBLIC_EXTENSIONS.has(ext) || lowerName.startsWith('.ht')) {
-    return `File extension "${ext || lowerName}" is blocked for security reasons.`;
-  }
-  if (BLOCKED_PUBLIC_MIMES.has(lowerMime)) {
-    return `MIME type "${lowerMime}" is blocked for security reasons.`;
-  }
-  if (ext === '.gif' && size > MAX_GIF_SIZE_BYTES) {
-    return 'GIF uploads are limited to 50 MB.';
-  }
-  if (size > MAX_FILE_SIZE_BYTES) {
-    return 'File exceeds the 500 MB limit.';
-  }
-  return null;
-}
-
-function formatBytes(bytes) {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
-
-function detectPreviewCategory(mimeType, filename) {
-  const ext = path.extname(filename || '').toLowerCase();
-  const lowerMime = (mimeType || '').toLowerCase().trim();
-
-  if (XSS_SENSITIVE_EXTENSIONS.has(ext) || lowerMime.includes('svg') || lowerMime.includes('html') || lowerMime.includes('xml')) {
-    return 'text';
-  }
-  if (lowerMime.startsWith('image/') || ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.bmp', '.ico'].includes(ext)) {
-    return 'image';
-  }
-  if (lowerMime.startsWith('video/') || ['.mp4', '.webm', '.ogg', '.ogv', '.mov', '.m4v', '.mkv', '.avi'].includes(ext)) {
-    return 'video';
-  }
-  if (lowerMime.startsWith('audio/') || ['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a', '.opus'].includes(ext)) {
-    return 'audio';
-  }
-  if (lowerMime === 'application/pdf' || ext === '.pdf') {
-    return 'pdf';
-  }
-
-  const textExts = new Set([
-    '.txt', '.md', '.json', '.js', '.ts', '.jsx', '.tsx', '.py',
-    '.html', '.css', '.csv', '.xml', '.yml', '.yaml', '.sh',
-    '.ps1', '.log', '.ini', '.conf', '.sql', '.c', '.cpp', '.rs', '.go'
-  ]);
-  if (
-    lowerMime.startsWith('text/') ||
-    lowerMime === 'application/json' ||
-    lowerMime === 'application/javascript' ||
-    lowerMime === 'application/xml' ||
-    textExts.has(ext)
-  ) {
-    return 'text';
-  }
-
-  return 'other';
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, UPLOADS_DIR);
-  },
-  filename: (req, file, cb) => {
+const storage = {
+  _handleFile(req, file, cb) {
     const safeName = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}.bin`;
-    cb(null, safeName);
+    const finalPath = path.join(UPLOADS_DIR, safeName);
+    const outStream = fs.createWriteStream(finalPath);
+    let writtenBytes = 0;
+    let settled = false;
+
+    const failQuota = (message) => {
+      if (settled) return;
+      settled = true;
+      file.stream.unpipe(outStream);
+      file.stream.resume();
+      safeUnlinkStreamTarget(outStream, finalPath);
+      const err = new Error(message);
+      err.statusCode = 507;
+      cb(err);
+    };
+
+    file.stream.on('data', (chunk) => {
+      if (settled) return;
+      writtenBytes += chunk.length;
+      if (typeof req.remainingServerQuota === 'number' && writtenBytes > req.remainingServerQuota) {
+        failQuota('Server storage quota reached.');
+        return;
+      }
+      if (typeof req.remainingClientQuota === 'number' && writtenBytes > req.remainingClientQuota) {
+        failQuota('Client storage quota reached.');
+      }
+    });
+
+    file.stream.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      safeUnlinkStreamTarget(outStream, finalPath);
+      cb(err);
+    });
+
+    outStream.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      safeUnlink(finalPath);
+      cb(err);
+    });
+
+    outStream.on('finish', () => {
+      if (settled) return;
+      settled = true;
+      cb(null, {
+        destination: UPLOADS_DIR,
+        filename: safeName,
+        path: finalPath,
+        size: writtenBytes
+      });
+    });
+
+    file.stream.pipe(outStream);
+  },
+  _removeFile(req, file, cb) {
+    const targetPath = file && file.path;
+    if (targetPath) {
+      safeUnlink(targetPath);
+    }
+    cb(null);
   }
-});
+};
 
 const upload = multer({
   storage,
@@ -1239,23 +1166,47 @@ function preUploadGuard(req, res, next) {
     return res.status(429).json({ error: 'Server is busy processing other uploads. Please try again shortly.' });
   }
 
-  const declaredLength = Math.max(0, parseInt(req.headers['content-length'] || '0', 10));
+  const rawContentLength = req.headers['content-length'];
+  let declaredLength = 0;
+  if (rawContentLength !== undefined) {
+    const trimmedLen = String(rawContentLength).trim();
+    if (!/^\d+$/.test(trimmedLen)) {
+      return res.status(400).json({ error: 'Invalid Content-Length header.' });
+    }
+    const parsedLen = Number(trimmedLen);
+    if (!Number.isSafeInteger(parsedLen) || parsedLen < 0) {
+      return res.status(413).json({ error: 'File exceeds the 500 MB limit.' });
+    }
+    declaredLength = parsedLen;
+  }
+
   if (declaredLength > MAX_FILE_SIZE_BYTES + 1024 * 1024) {
     return res.status(413).json({ error: 'File exceeds the 500 MB limit.' });
   }
 
   const db = loadDatabase();
-  const rawIp = getClientIp(req);
-  const effectiveIpHash = ['127.0.0.1', '::1', 'unknown'].includes(rawIp) ? null : hashClientIp(req);
+  const effectiveIpHash = getEffectiveIpHash(req);
+  const clientActiveKey = getClientActiveKey(req);
+  const activeClientBytes = getClientActiveBytes(clientActiveKey);
 
-  if (getTotalStorageUsed(db) + activeUploadBytes + declaredLength > MAX_TOTAL_STORAGE_BYTES) {
+  const serverUsed = getTotalStorageUsed(db);
+  if (serverUsed + activeUploadBytes + declaredLength > MAX_TOTAL_STORAGE_BYTES) {
     return res.status(507).json({ error: 'Server storage quota reached.' });
   }
 
   const clientQuota = getClientStorageQuota();
   const clientUsed = getClientStorageUsed(db, req.clientIdHash, req.customClientHash, effectiveIpHash);
   const isSmallCatboxControl = req.path === '/user/api.php' && declaredLength > 0 && declaredLength <= 65536;
-  if (!isSmallCatboxControl && clientUsed + activeUploadBytes + declaredLength > clientQuota) {
+  const remainingServerQuota = Math.max(0, MAX_TOTAL_STORAGE_BYTES - (serverUsed + activeUploadBytes));
+  const remainingClientQuota = Math.max(0, clientQuota - (clientUsed + activeClientBytes));
+  req.remainingServerQuota = remainingServerQuota;
+  req.remainingClientQuota = remainingClientQuota;
+
+  const isChunkedUploadEndpoint = rawContentLength === undefined && req.path !== '/user/api.php';
+  if (
+    (!isSmallCatboxControl && clientUsed + activeClientBytes + declaredLength > clientQuota) ||
+    (isChunkedUploadEndpoint && remainingClientQuota <= 0)
+  ) {
     if (req.path.includes('.php')) {
       return res.status(507).type('text/plain').send('Client storage quota reached.');
     }
@@ -1266,12 +1217,14 @@ function preUploadGuard(req, res, next) {
 
   activeUploads += 1;
   activeUploadBytes += declaredLength;
+  adjustClientActiveBytes(clientActiveKey, declaredLength);
   let decremented = false;
   const decrement = () => {
     if (!decremented) {
       decremented = true;
       activeUploads = Math.max(0, activeUploads - 1);
       activeUploadBytes = Math.max(0, activeUploadBytes - declaredLength);
+      adjustClientActiveBytes(clientActiveKey, -declaredLength);
     }
   };
   res.on('finish', decrement);
@@ -1283,7 +1236,7 @@ app.use(express.json({ limit: '128kb' }));
 app.use(express.urlencoded({ extended: false, limit: '128kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-const ALLOWED_HOST_REGEX = /^([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+(:\d+)?$/;
+const ALLOWED_HOST_REGEX = /^([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+(:\d{1,5})?$/;
 
 function resolveBaseUrl(req) {
   if (publicBaseUrl) {
@@ -1292,7 +1245,7 @@ function resolveBaseUrl(req) {
   const host = (req.get('host') || '').trim();
   if (host && ALLOWED_HOST_REGEX.test(host)) {
     const isLocal = host.startsWith('localhost') || host.startsWith('127.0.0.1');
-    const isHttps = req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https' || !isLocal;
+    const isHttps = req.secure || !isLocal;
     const proto = isHttps ? 'https' : 'http';
     return `${proto}://${host}`;
   }
@@ -1303,11 +1256,8 @@ async function buildFileResponse(req, record, options = {}) {
   const includeQr = options.includeQr !== false;
   const disableSigning = options.disableSigning === true;
   const baseUrl = resolveBaseUrl(req);
-  let ext = getSafeExtension(record.originalName);
   const delivery = resolveRawMediaDelivery(record);
-  if (!ext && delivery.category === 'video') {
-    ext = delivery.contentType === 'video/webm' ? '.webm' : '.mp4';
-  }
+  const ext = getDirectFileExt(record, delivery);
   let shortUrl = `${baseUrl}/s/${record.code}`;
   let rawPath = `/raw/${record.code}`;
   let downloadPath = `/d/${record.code}`;
@@ -1315,7 +1265,10 @@ async function buildFileResponse(req, record, options = {}) {
 
   let signedExpires = null;
   if (record.requireSignedUrl && !disableSigning) {
-    signedExpires = Math.floor(Date.now() / 1000) + SIGNED_URL_TTL_SECONDS;
+    const defaultExpires = Math.floor(Date.now() / 1000) + SIGNED_URL_TTL_SECONDS;
+    signedExpires = Number.isFinite(options.maxExpires)
+      ? Math.min(defaultExpires, options.maxExpires)
+      : defaultExpires;
     const shareSig = computeSecureLinkSignature(`/s/${record.code}`, signedExpires);
     const rawSig = computeSecureLinkSignature(rawPath, signedExpires);
     const dlSig = computeSecureLinkSignature(downloadPath, signedExpires);
@@ -1377,11 +1330,7 @@ async function registerUploadedFile({
   ipHash = null,
   lowercaseCode = false
 }) {
-  const cleanName =
-    path
-      .basename(rawOriginalName || 'file')
-      .replace(/[\x00-\x1f\x7f]/g, '')
-      .slice(0, 240) || 'file';
+  const { cleanName, rawBaseName } = sanitizeUploadFilename(rawOriginalName, 240);
 
   if (!Number.isFinite(size) || size <= 0) {
     safeUnlink(tempFilePath);
@@ -1390,22 +1339,29 @@ async function registerUploadedFile({
     throw err;
   }
 
-  if (await isExecutableBinaryFile(tempFilePath)) {
-    safeUnlink(tempFilePath);
-    const err = new Error('Executable binaries (PE/ELF/Mach-O) are not permitted.');
-    err.statusCode = 415;
-    throw err;
-  }
-
-  const policyError = validateUploadPolicy({
-    originalName: cleanName,
+  const rawPolicyError = validateUploadPolicy({
+    originalName: rawBaseName,
     mimeType,
     size
   });
+  const policyError =
+    rawPolicyError ||
+    validateUploadPolicy({
+      originalName: cleanName,
+      mimeType,
+      size
+    });
   if (policyError) {
     safeUnlink(tempFilePath);
     const err = new Error(policyError);
     err.statusCode = size <= 0 ? 400 : 415;
+    throw err;
+  }
+
+  if (await isExecutableBinaryFile(tempFilePath)) {
+    safeUnlink(tempFilePath);
+    const err = new Error('Executable binaries (PE/ELF/Mach-O) are not permitted.');
+    err.statusCode = 415;
     throw err;
   }
 
@@ -1423,21 +1379,13 @@ async function registerUploadedFile({
 
   let storedName = path.basename(tempFilePath);
   let deduplicated = false;
-  for (const existing of Object.values(db)) {
-    if (
-      existing &&
-      existing.sha256 === sha256 &&
-      existing.size === size &&
-      existing.storedName &&
-      fs.existsSync(path.join(UPLOADS_DIR, path.basename(existing.storedName)))
-    ) {
-      if (path.basename(existing.storedName) !== storedName) {
-        safeUnlink(tempFilePath);
-      }
-      storedName = path.basename(existing.storedName);
-      deduplicated = true;
-      break;
+  const reusable = findReusableRecordBySha256(db, sha256, size);
+  if (reusable) {
+    if (path.basename(reusable.storedName) !== storedName) {
+      safeUnlink(tempFilePath);
     }
+    storedName = path.basename(reusable.storedName);
+    deduplicated = true;
   }
 
   if (!deduplicated && getTotalStorageUsed(db) + size > MAX_TOTAL_STORAGE_BYTES) {
@@ -1448,12 +1396,22 @@ async function registerUploadedFile({
   }
 
   const clientQuota = getClientStorageQuota();
-  const clientUsed = getClientStorageUsed(db, clientIdHash, userhash ? hashToken(userhash) : null, ipHash);
+  const customHash = userhash ? hashToken(userhash) : null;
+  const clientUsed = getClientStorageUsed(db, clientIdHash, customHash, ipHash);
   if (clientUsed + size > clientQuota) {
     if (!deduplicated) {
       safeUnlink(tempFilePath);
     }
     const err = new Error(`Client storage quota of ${formatBytes(clientQuota)} reached`);
+    err.statusCode = 507;
+    throw err;
+  }
+
+  if (countClientActiveFiles(db, clientIdHash, customHash, ipHash) >= MAX_FILES_PER_CLIENT) {
+    if (!deduplicated) {
+      safeUnlink(tempFilePath);
+    }
+    const err = new Error('Client file count limit reached.');
     err.statusCode = 507;
     throw err;
   }
@@ -1495,134 +1453,15 @@ async function registerUploadedFile({
   };
 
   db[code] = record;
+  indexDbRecord(record);
   saveDatabase(db);
   saveRecordSidecar(record);
 
   return { record, deleteToken };
 }
 
-function parseIpv6Words(addr) {
-  let lower = addr.toLowerCase().trim();
-  if (lower.startsWith('[') && lower.endsWith(']')) {
-    lower = lower.slice(1, -1);
-  }
-  const zoneIndex = lower.indexOf('%');
-  if (zoneIndex !== -1) {
-    lower = lower.slice(0, zoneIndex);
-  }
-  const doubleColon = lower.indexOf('::');
-  let headParts = [];
-  let tailParts = [];
-  if (doubleColon !== -1) {
-    const head = lower.slice(0, doubleColon);
-    const tail = lower.slice(doubleColon + 2);
-    headParts = head ? head.split(':') : [];
-    tailParts = tail ? tail.split(':') : [];
-  } else {
-    headParts = lower.split(':');
-  }
-
-  const expandPart = (part) => {
-    if (net.isIPv4(part)) {
-      const octets = part.split('.').map(Number);
-      return [((octets[0] << 8) | octets[1]) >>> 0, ((octets[2] << 8) | octets[3]) >>> 0];
-    }
-    return [parseInt(part, 16)];
-  };
-
-  const headWords = [];
-  for (const p of headParts) {
-    headWords.push(...expandPart(p));
-  }
-  const tailWords = [];
-  for (const p of tailParts) {
-    tailWords.push(...expandPart(p));
-  }
-
-  if (doubleColon !== -1) {
-    const missing = 8 - (headWords.length + tailWords.length);
-    if (missing < 0) return null;
-    const zeros = new Array(missing).fill(0);
-    return [...headWords, ...zeros, ...tailWords];
-  }
-  return headWords.length === 8 ? headWords : null;
-}
-
-function isPrivateOrReservedIp(ip) {
-  if (typeof ip !== 'string') return true;
-  let cleanIp = ip.trim().toLowerCase();
-  if (cleanIp.startsWith('[') && cleanIp.endsWith(']')) {
-    cleanIp = cleanIp.slice(1, -1);
-  }
-  if (!net.isIP(cleanIp)) return true;
-  if (cleanIp === '127.0.0.1' || cleanIp === '0.0.0.0' || cleanIp === '::1' || cleanIp === '::') return true;
-
-  if (net.isIPv4(cleanIp)) {
-    const parts = cleanIp.split('.').map(Number);
-    if (parts[0] === 0 || parts[0] === 10 || parts[0] === 127) return true;
-    if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true;
-    if (parts[0] === 169 && parts[1] === 254) return true;
-    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
-    if (parts[0] === 192 && parts[1] === 0 && (parts[2] === 0 || parts[2] === 2)) return true;
-    if (parts[0] === 192 && parts[1] === 88 && parts[2] === 99) return true;
-    if (parts[0] === 192 && parts[1] === 168) return true;
-    if (parts[0] === 198 && (parts[1] === 18 || parts[1] === 19)) return true;
-    if (parts[0] === 198 && parts[1] === 51 && parts[2] === 100) return true;
-    if (parts[0] === 203 && parts[1] === 0 && parts[2] === 113) return true;
-    if (parts[0] >= 224) return true;
-    return false;
-  }
-
-  const words = parseIpv6Words(cleanIp);
-  if (!words) return true;
-
-  if (
-    words[0] === 0 &&
-    words[1] === 0 &&
-    words[2] === 0 &&
-    words[3] === 0 &&
-    words[4] === 0 &&
-    words[5] === 0 &&
-    words[6] === 0 &&
-    words[7] === 1
-  ) {
-    return true;
-  }
-
-  if (words.every((w) => w === 0)) {
-    return true;
-  }
-
-  if (
-    (words[0] === 0 && words[1] === 0 && words[2] === 0 && words[3] === 0 && words[4] === 0 && words[5] === 0xffff) ||
-    (words[0] === 0 && words[1] === 0 && words[2] === 0 && words[3] === 0 && words[4] === 0 && words[5] === 0)
-  ) {
-    const v4 = `${(words[6] >> 8) & 0xff}.${words[6] & 0xff}.${(words[7] >> 8) & 0xff}.${words[7] & 0xff}`;
-    return isPrivateOrReservedIp(v4);
-  }
-
-  if ((words[0] & 0xfe00) === 0xfc00) return true;
-  if ((words[0] & 0xffc0) === 0xfe80) return true;
-  if ((words[0] & 0xffc0) === 0xfec0) return true;
-  if ((words[0] & 0xff00) === 0xff00) return true;
-  if (words[0] === 0x2001 && words[1] === 0) return true;
-  if (words[0] === 0x2001 && words[1] === 2) return true;
-  if (words[0] === 0x2001 && (words[1] & 0xfff0) === 0x0020) return true;
-  if (words[0] === 0x2001 && words[1] === 0x0db8) return true;
-  if (words[0] === 0x0100 && words[1] === 0 && words[2] === 0 && words[3] === 0) return true;
-  if (words[0] === 0x0064 && words[1] === 0xff9b) {
-    const v4 = `${(words[6] >> 8) & 0xff}.${words[6] & 0xff}.${(words[7] >> 8) & 0xff}.${words[7] & 0xff}`;
-    return isPrivateOrReservedIp(v4);
-  }
-  if (words[0] === 0x2002) {
-    const v4 = `${(words[1] >> 8) & 0xff}.${words[1] & 0xff}.${(words[2] >> 8) & 0xff}.${words[2] & 0xff}`;
-    return isPrivateOrReservedIp(v4);
-  }
-
-  return false;
-}
-
-async function fetchRemoteUrlToTempFile(rawUrl) {
+async function fetchRemoteUrlToTempFile(rawUrl, options = {}) {
+  const { maxClientRemainingBytes = null } = options;
   let parsed;
   try {
     parsed = new URL(String(rawUrl).trim());
@@ -1650,9 +1489,16 @@ async function fetchRemoteUrlToTempFile(rawUrl) {
     throw err;
   }
 
+  const lookupHost = parsed.hostname.replace(/^\[|\]$/g, '');
+  if (net.isIP(lookupHost) && isPrivateOrReservedIp(lookupHost)) {
+    const err = new Error('Remote URL points to a restricted or private network address');
+    err.statusCode = 412;
+    throw err;
+  }
+
   let addresses;
   try {
-    addresses = await dns.promises.lookup(parsed.hostname, { all: true });
+    addresses = await dns.promises.lookup(lookupHost, { all: true });
   } catch {
     const err = new Error('Could not resolve remote hostname');
     err.statusCode = 412;
@@ -1670,6 +1516,11 @@ async function fetchRemoteUrlToTempFile(rawUrl) {
     err.statusCode = 507;
     throw err;
   }
+  if (maxClientRemainingBytes !== null && maxClientRemainingBytes <= 0) {
+    const err = new Error('Client storage quota reached');
+    err.statusCode = 507;
+    throw err;
+  }
 
   const safeAddress = addresses[0];
   const tempFilePath = path.join(
@@ -1680,18 +1531,26 @@ async function fetchRemoteUrlToTempFile(rawUrl) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let trackedActiveBytes = 0;
+    let activeResp = null;
+    let activeOut = null;
     const releaseTrackedBytes = () => {
       if (trackedActiveBytes > 0) {
         activeUploadBytes = Math.max(0, activeUploadBytes - trackedActiveBytes);
         trackedActiveBytes = 0;
       }
     };
+    const cleanupAndUnlink = () => {
+      if (activeResp && !activeResp.destroyed) {
+        activeResp.destroy();
+      }
+      safeUnlinkStreamTarget(activeOut, tempFilePath);
+    };
     const finishReject = (err) => {
       if (settled) return;
       settled = true;
       clearTimeout(hardTimer);
       releaseTrackedBytes();
-      safeUnlink(tempFilePath);
+      cleanupAndUnlink();
       reject(err);
     };
     const finishResolve = (val) => {
@@ -1712,12 +1571,13 @@ async function fetchRemoteUrlToTempFile(rawUrl) {
         timeout: 15000,
         lookup: (hostname, opts, cb) => {
           if (opts && opts.all) {
-            return cb(null, [{ address: safeAddress.address, family: safeAddress.family }]);
+            return cb(null, addresses.map((a) => ({ address: a.address, family: a.family })));
           }
           return cb(null, safeAddress.address, safeAddress.family);
         }
       },
       (resp) => {
+        activeResp = resp;
         if (resp.statusCode && resp.statusCode >= 300 && resp.statusCode < 400 && resp.headers.location) {
           resp.resume();
           const redirectErr = new Error('Remote URL redirects are not followed automatically; use direct media URL');
@@ -1731,7 +1591,24 @@ async function fetchRemoteUrlToTempFile(rawUrl) {
           return finishReject(statusErr);
         }
 
-        const declaredLen = parseInt(resp.headers['content-length'] || '0', 10);
+        const rawContentLength = resp.headers['content-length'];
+        let declaredLen = 0;
+        if (rawContentLength !== undefined) {
+          const trimmed = String(rawContentLength).trim();
+          if (!/^\d+$/.test(trimmed)) {
+            resp.destroy();
+            const lenErr = new Error('Remote server returned invalid Content-Length');
+            lenErr.statusCode = 412;
+            return finishReject(lenErr);
+          }
+          declaredLen = Number(trimmed);
+          if (!Number.isSafeInteger(declaredLen)) {
+            resp.destroy();
+            const maxErr = new Error('Remote file exceeds 500 MB limit');
+            maxErr.statusCode = 413;
+            return finishReject(maxErr);
+          }
+        }
         if (declaredLen > MAX_FILE_SIZE_BYTES) {
           resp.resume();
           const maxErr = new Error('Remote file exceeds 500 MB limit');
@@ -1744,11 +1621,18 @@ async function fetchRemoteUrlToTempFile(rawUrl) {
           quotaErr.statusCode = 507;
           return finishReject(quotaErr);
         }
+        if (maxClientRemainingBytes !== null && declaredLen > maxClientRemainingBytes) {
+          resp.resume();
+          const clientQuotaErr = new Error('Client storage quota reached');
+          clientQuotaErr.statusCode = 507;
+          return finishReject(clientQuotaErr);
+        }
 
         const contentType = (resp.headers['content-type'] || 'application/octet-stream')
           .split(';')[0]
           .trim();
         const out = fs.createWriteStream(tempFilePath);
+        activeOut = out;
         let receivedBytes = 0;
 
         resp.on('data', (chunk) => {
@@ -1756,24 +1640,26 @@ async function fetchRemoteUrlToTempFile(rawUrl) {
           trackedActiveBytes += chunk.length;
           activeUploadBytes += chunk.length;
           if (receivedBytes > MAX_FILE_SIZE_BYTES) {
-            resp.destroy();
-            out.destroy();
             const maxErr = new Error('Remote file exceeds 500 MB limit');
             maxErr.statusCode = 413;
             finishReject(maxErr);
             return;
           }
           if (getTotalStorageUsed(loadDatabase()) + activeUploadBytes > MAX_TOTAL_STORAGE_BYTES) {
-            resp.destroy();
-            out.destroy();
             const quotaErr = new Error('Server storage quota reached');
             quotaErr.statusCode = 507;
             finishReject(quotaErr);
+            return;
+          }
+          if (maxClientRemainingBytes !== null && receivedBytes > maxClientRemainingBytes) {
+            const clientQuotaErr = new Error('Client storage quota reached');
+            clientQuotaErr.statusCode = 507;
+            finishReject(clientQuotaErr);
+            return;
           }
         });
 
         resp.on('error', (err) => {
-          out.destroy();
           err.statusCode = 412;
           finishReject(err);
         });
@@ -1823,6 +1709,9 @@ async function fetchRemoteUrlToTempFile(rawUrl) {
     );
 
     const hardTimer = setTimeout(() => {
+      if (activeResp && !activeResp.destroyed) {
+        activeResp.destroy();
+      }
       req.destroy(new Error('Remote URL transfer timed out'));
     }, 30000);
 
@@ -2073,13 +1962,8 @@ app.post('/api/report', reportRateLimiter, (req, res) => {
           };
           saveBlockedHashes(blockedHashes);
         }
-        const storedName = record.storedName;
-        delete db[record.code];
+        removeRecordAndOrphanedFile(db, record);
         saveDatabase(db);
-        deleteRecordSidecar(storedName, record.code);
-        if (storedName && !isStoredFileReferenced(db, storedName, record.code)) {
-          safeUnlink(path.join(UPLOADS_DIR, path.basename(storedName)));
-        }
         mitigated = true;
       }
     }
@@ -2143,13 +2027,8 @@ app.delete('/api/admin/files/:code', requireAdminAuth, (req, res) => {
     if (!record) {
       return res.status(404).json({ error: 'File not found' });
     }
-    const storedName = record.storedName;
-    delete db[record.code];
+    removeRecordAndOrphanedFile(db, record);
     saveDatabase(db);
-    deleteRecordSidecar(storedName, record.code);
-    if (storedName && !isStoredFileReferenced(db, storedName, record.code)) {
-      safeUnlink(path.join(UPLOADS_DIR, path.basename(storedName)));
-    }
     return res.json({ deleted: true, code: record.code });
   } catch {
     return res.status(500).json({ error: 'Failed to delete file' });
@@ -2173,15 +2052,10 @@ app.post('/api/admin/block-hash', requireAdminAuth, (req, res) => {
 
     const db = loadDatabase();
     let removedCount = 0;
-    for (const [code, rec] of Object.entries(db)) {
+    for (const rec of Object.values(db)) {
       if (rec && rec.sha256 === sha256) {
-        const storedName = rec.storedName;
-        delete db[code];
-        deleteRecordSidecar(storedName, code);
+        removeRecordAndOrphanedFile(db, rec);
         removedCount += 1;
-        if (storedName && !isStoredFileReferenced(db, storedName, code)) {
-          safeUnlink(path.join(UPLOADS_DIR, path.basename(storedName)));
-        }
       }
     }
     if (removedCount > 0) {
@@ -2195,8 +2069,17 @@ app.post('/api/admin/block-hash', requireAdminAuth, (req, res) => {
 
 app.get('/api/admin/reports', requireAdminAuth, (req, res) => {
   try {
-    const reports = loadReports();
-    res.json({ reports, total: reports.length });
+    const allReports = loadReports();
+    const rawLimit = req.query.limit !== undefined ? parseInt(String(req.query.limit), 10) : null;
+    const rawOffset = req.query.offset !== undefined ? parseInt(String(req.query.offset), 10) : 0;
+    const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
+    const reports =
+      rawLimit !== null && Number.isFinite(rawLimit) && rawLimit > 0
+        ? allReports.slice(offset, offset + Math.min(rawLimit, 500))
+        : offset > 0
+          ? allReports.slice(offset)
+          : allReports;
+    res.json({ reports, total: allReports.length });
   } catch {
     res.status(500).json({ error: 'Failed to load reports' });
   }
@@ -2320,9 +2203,19 @@ app.post('/api/url-upload', uploadRateLimiter, requireCsrfHeader, preUploadGuard
       req.body?.requireSignedUrl === 1;
     const userhash = String(req.body?.userhash || '').trim() || null;
 
-    const rawIp = getClientIp(req);
-    const effectiveIpHash = ['127.0.0.1', '::1', 'unknown'].includes(rawIp) ? null : hashClientIp(req);
-    const fetched = await fetchRemoteUrlToTempFile(targetUrl);
+    const effectiveIpHash = getEffectiveIpHash(req);
+    const db = loadDatabase();
+    const customHash = userhash ? hashToken(userhash) : req.customClientHash;
+    const clientQuota = getClientStorageQuota();
+    const clientUsed = getClientStorageUsed(db, req.clientIdHash, customHash, effectiveIpHash);
+    const activeForClient = getClientActiveBytes(getClientActiveKey(req, customHash));
+    const maxClientRemainingBytes = Math.max(0, clientQuota - (clientUsed + activeForClient));
+    if (maxClientRemainingBytes <= 0) {
+      return res.status(507).json({
+        error: `Client storage quota of ${formatBytes(clientQuota)} reached.`
+      });
+    }
+    const fetched = await fetchRemoteUrlToTempFile(targetUrl, { maxClientRemainingBytes });
     const { record, deleteToken } = await registerUploadedFile({
       tempFilePath: fetched.tempFilePath,
       rawOriginalName: fetched.originalName,
@@ -2373,7 +2266,10 @@ const catboxUploadMiddleware = multer({
 app.post('/user/api.php', csrfCrossSiteGuard, uploadRateLimiter, preUploadGuard, (req, res) => {
   catboxUploadMiddleware(req, res, async (multerErr) => {
     if (multerErr) {
-      return res.status(413).type('text/plain').send(multerErr.message);
+      const status =
+        multerErr.statusCode ||
+        (multerErr.code === 'LIMIT_FILE_SIZE' ? 413 : multerErr instanceof multer.MulterError ? 400 : 500);
+      return res.status(status).type('text/plain').send(multerErr.message);
     }
     try {
       const reqtype = String(req.body?.reqtype || '').trim();
@@ -2389,8 +2285,7 @@ app.post('/user/api.php', csrfCrossSiteGuard, uploadRateLimiter, preUploadGuard,
         if (!req.file) {
           return res.status(400).type('text/plain').send('No fileToUpload provided.');
         }
-        const rawIp = getClientIp(req);
-        const effectiveIpHash = ['127.0.0.1', '::1', 'unknown'].includes(rawIp) ? null : hashClientIp(req);
+        const effectiveIpHash = getEffectiveIpHash(req);
         const rawOriginalName = decodeOriginalName(req.file.originalname);
         const { record } = await registerUploadedFile({
           tempFilePath: req.file.path,
@@ -2413,20 +2308,17 @@ app.post('/user/api.php', csrfCrossSiteGuard, uploadRateLimiter, preUploadGuard,
         if (!targetUrl) {
           return res.status(412).type('text/plain').send('No url provided.');
         }
-        const rawIp = getClientIp(req);
-        const effectiveIpHash = ['127.0.0.1', '::1', 'unknown'].includes(rawIp) ? null : hashClientIp(req);
+        const effectiveIpHash = getEffectiveIpHash(req);
         const db = loadDatabase();
+        const customHash = userhash ? hashToken(userhash) : req.customClientHash;
         const clientQuota = getClientStorageQuota();
-        const clientUsed = getClientStorageUsed(
-          db,
-          req.clientIdHash,
-          userhash ? hashToken(userhash) : req.customClientHash,
-          effectiveIpHash
-        );
-        if (clientUsed >= clientQuota) {
+        const clientUsed = getClientStorageUsed(db, req.clientIdHash, customHash, effectiveIpHash);
+        const activeForClient = getClientActiveBytes(getClientActiveKey(req, customHash));
+        const maxClientRemainingBytes = Math.max(0, clientQuota - (clientUsed + activeForClient));
+        if (maxClientRemainingBytes <= 0) {
           return res.status(507).type('text/plain').send('Client storage quota reached.');
         }
-        const fetched = await fetchRemoteUrlToTempFile(targetUrl);
+        const fetched = await fetchRemoteUrlToTempFile(targetUrl, { maxClientRemainingBytes });
         const { record } = await registerUploadedFile({
           tempFilePath: fetched.tempFilePath,
           rawOriginalName: fetched.originalName,
@@ -2466,13 +2358,8 @@ app.post('/user/api.php', csrfCrossSiteGuard, uploadRateLimiter, preUploadGuard,
           }
           targets.push({ code, rec: record });
         }
-        for (const { code, rec } of targets) {
-          const storedName = rec.storedName;
-          delete db[code];
-          deleteRecordSidecar(storedName, code);
-          if (!isStoredFileReferenced(db, storedName, code)) {
-            safeUnlink(path.join(UPLOADS_DIR, path.basename(storedName)));
-          }
+        for (const { rec } of targets) {
+          removeRecordAndOrphanedFile(db, rec);
         }
         saveDatabase(db);
         return res.status(200).type('text/plain').send('Files successfully deleted.');
@@ -2573,7 +2460,10 @@ app.post('/user/api.php', csrfCrossSiteGuard, uploadRateLimiter, preUploadGuard,
 app.post('/resources/internals/api.php', csrfCrossSiteGuard, uploadRateLimiter, preUploadGuard, (req, res) => {
   catboxUploadMiddleware(req, res, async (multerErr) => {
     if (multerErr) {
-      return res.status(413).type('text/plain').send(multerErr.message);
+      const status =
+        multerErr.statusCode ||
+        (multerErr.code === 'LIMIT_FILE_SIZE' ? 413 : multerErr instanceof multer.MulterError ? 400 : 500);
+      return res.status(status).type('text/plain').send(multerErr.message);
     }
     try {
       const reqtype = String(req.body?.reqtype || '').trim();
@@ -2616,7 +2506,11 @@ app.post('/api/albums', uploadRateLimiter, requireCsrfHeader, async (req, res) =
   try {
     const title = String(req.body?.title || 'Shared Album').trim().slice(0, 140) || 'Shared Album';
     const description = String(req.body?.description || '').trim().slice(0, 1000);
-    const rawFiles = Array.isArray(req.body?.files) ? req.body.files : [];
+    const inputFiles = Array.isArray(req.body?.files) ? req.body.files : [];
+    if (inputFiles.length > 500) {
+      return res.status(400).json({ error: 'Albums are limited to at most 500 files' });
+    }
+    const rawFiles = inputFiles.slice(0, 500);
     const db = loadDatabase();
     for (const rawCode of rawFiles) {
       const c = String(rawCode).trim().split('.')[0];
@@ -2630,8 +2524,7 @@ app.post('/api/albums', uploadRateLimiter, requireCsrfHeader, async (req, res) =
       .filter((c) => {
         const rec = getRecordByCode(db, c);
         return rec && !rec.requireSignedUrl;
-      })
-      .slice(0, 500);
+      });
 
     if (!validFiles.length) {
       return res.status(400).json({ error: 'Select at least one valid file to create an album' });
@@ -2813,21 +2706,18 @@ app.get('/api/files/:code', lookupRateLimiter, async (req, res) => {
       return res.status(404).json({ error: 'Shared file not found or has expired' });
     }
 
+    let maxSignedExpires = null;
     if (record.requireSignedUrl) {
       const isOwner = isRecordOwner(req, record);
-      const deleteHeader = String(req.headers['x-delete-token'] || '').trim();
-      const tokenMatches = Boolean(
-        deleteHeader &&
-          record.deleteTokenHash &&
-          safeTimingEqualStrings(record.deleteTokenHash, hashToken(deleteHeader))
-      );
-      const adminMatches = hasValidAdminAuth(req);
-      const sigOk =
-        verifySecureLink(`/s/${record.code}`, req.query.sig, req.query.expires).ok ||
-        verifySecureLink(req.path, req.query.sig, req.query.expires).ok;
-      if (!isOwner && !tokenMatches && !adminMatches && !sigOk) {
+      const sigShare = verifySecureLink(`/s/${record.code}`, req.query.sig, req.query.expires);
+      const sigPath = verifySecureLink(req.path, req.query.sig, req.query.expires);
+      const matchedSig = sigShare.ok ? sigShare : sigPath;
+      if (!isOwner && !matchedSig.ok) {
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         return res.status(403).json({ error: 'Valid signature or authorization required for signed file.' });
+      }
+      if (!isOwner && matchedSig.ok) {
+        maxSignedExpires = matchedSig.expires;
       }
     }
 
@@ -2843,7 +2733,7 @@ app.get('/api/files/:code', lookupRateLimiter, async (req, res) => {
       isEphemeral ? 'private, no-cache, no-store, must-revalidate' : 'public, max-age=60'
     );
 
-    const payload = await buildFileResponse(req, record);
+    const payload = await buildFileResponse(req, record, { maxExpires: maxSignedExpires });
     res.json(payload);
   } catch (err) {
     console.error('Metadata error:', err);
@@ -2859,35 +2749,12 @@ app.delete('/api/files/:code', lookupRateLimiter, requireCsrfHeader, (req, res) 
       return res.status(404).json({ error: 'File not found' });
     }
 
-    const providedToken = String(req.headers['x-delete-token'] || '');
-    const hasOwnerToken = Boolean(
-      record.deleteTokenHash &&
-        providedToken &&
-        safeTimingEqualStrings(hashToken(providedToken), record.deleteTokenHash)
-    );
-    const hasCookieOwnership = Boolean(
-      record.clientIdHash &&
-        req.clientIdHash &&
-        safeTimingEqualStrings(record.clientIdHash, req.clientIdHash)
-    );
-    const hasCustomOwnership = Boolean(
-      record.userhash &&
-        req.customClientHash &&
-        safeTimingEqualStrings(record.userhash, req.customClientHash)
-    );
-
-    if (!hasOwnerToken && !hasCookieOwnership && !hasCustomOwnership && !hasValidAdminAuth(req)) {
+    if (!isRecordOwner(req, record)) {
       return res.status(401).json({ error: 'Unauthorized: valid Bearer ADMIN_TOKEN required' });
     }
 
-    const storedName = record.storedName;
-    delete db[record.code];
+    removeRecordAndOrphanedFile(db, record);
     saveDatabase(db);
-    deleteRecordSidecar(storedName, record.code);
-
-    if (!isStoredFileReferenced(db, storedName, record.code)) {
-      safeUnlink(path.join(UPLOADS_DIR, path.basename(storedName)));
-    }
 
     res.json({ success: true });
   } catch (err) {
@@ -2896,37 +2763,35 @@ app.delete('/api/files/:code', lookupRateLimiter, requireCsrfHeader, (req, res) 
   }
 });
 
-function resolveRawMediaDelivery(record) {
-  const ext = getSafeExtension(record.originalName);
-  let lowerMime = (record.mimeType || '').toLowerCase().trim();
-  if ((!lowerMime || lowerMime === 'application/octet-stream') && MIME_BY_EXT[ext]) {
-    lowerMime = MIME_BY_EXT[ext];
+function applyRawMediaHeaders(res, record, delivery, isEphemeral) {
+  if (isEphemeral) {
+    res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  } else {
+    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
   }
-  const category = detectPreviewCategory(lowerMime, record.originalName);
 
-  if (category === 'text' || XSS_SENSITIVE_EXTENSIONS.has(ext)) {
-    return {
-      category: 'text',
-      contentType: 'text/plain; charset=utf-8',
-      disposition: 'inline',
-      isPdf: false
-    };
+  if (delivery.category === 'text') {
+    res.setHeader('Content-Security-Policy', "sandbox; default-src 'none';");
+  } else if (delivery.isPdf) {
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'"
+    );
   }
-  if (category === 'video' || category === 'audio' || category === 'image' || SAFE_INLINE_MEDIA_MIMES.has(lowerMime)) {
-    const finalMime = lowerMime || (category === 'video' ? 'video/mp4' : 'application/octet-stream');
-    return {
-      category,
-      contentType: finalMime,
-      disposition: 'inline',
-      isPdf: finalMime === 'application/pdf' || ext === '.pdf'
-    };
-  }
-  return {
-    category: 'other',
-    contentType: 'application/octet-stream',
-    disposition: 'attachment',
-    isPdf: false
-  };
+
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
+  res.setHeader('Content-Type', delivery.contentType);
+  res.setHeader(
+    'Content-Disposition',
+    buildContentDisposition(delivery.disposition, record.originalName)
+  );
 }
 
 app.options(['/raw/:code', '/raw/:code.:ext', '/files/:codeWithExt', '/f/:code', '/d/:code'], lookupRateLimiter, (req, res) => {
@@ -2938,13 +2803,13 @@ app.options(['/raw/:code', '/raw/:code.:ext', '/files/:codeWithExt', '/f/:code',
 });
 
 app.options('/api/*', lookupRateLimiter, (req, res) => {
+  res.setHeader('Vary', 'Origin');
   const origin = String(req.headers.origin || '').trim();
   const reqHost = req.get('host');
   const sameOrigin = reqHost ? `${req.protocol}://${reqHost}` : '';
   const baseUrl = resolveBaseUrl(req);
   if (origin && (origin === sameOrigin || origin === baseUrl)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, X-Requested-With, X-Delete-Token, Authorization');
     res.setHeader('Access-Control-Max-Age', '86400');
@@ -2971,23 +2836,15 @@ app.head(['/raw/:code', '/raw/:code.:ext', '/files/:codeWithExt', '/f/:code'], l
       return res.status(403).end();
     }
   }
+  const filePath = path.join(UPLOADS_DIR, path.basename(record.storedName));
+  if (!fs.existsSync(filePath)) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    return res.status(404).end();
+  }
   const isEphemeral = Boolean(record.requireSignedUrl || record.expiresAt || record.ttl !== 'permanent');
-  res.setHeader(
-    'Cache-Control',
-    isEphemeral ? 'private, no-cache, no-store, must-revalidate' : 'public, max-age=86400, immutable'
-  );
   const delivery = resolveRawMediaDelivery(record);
-  res.setHeader('Accept-Ranges', 'bytes');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept');
-  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
-  res.setHeader('Content-Type', delivery.contentType);
+  applyRawMediaHeaders(res, record, delivery, isEphemeral);
   res.setHeader('Content-Length', String(record.size || 0));
-  res.setHeader(
-    'Content-Disposition',
-    buildContentDisposition(delivery.disposition, record.originalName)
-  );
   return res.status(200).end();
 });
 
@@ -3016,36 +2873,8 @@ function serveRawMedia(req, res, rawCodeParam) {
     }
 
     const isEphemeral = Boolean(record.requireSignedUrl || record.expiresAt || record.ttl !== 'permanent');
-    if (isEphemeral) {
-      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
-      res.setHeader('Pragma', 'no-cache');
-      res.setHeader('Expires', '0');
-    } else {
-      res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
-    }
-
     const delivery = resolveRawMediaDelivery(record);
-
-    if (delivery.category === 'text') {
-      res.setHeader('Content-Security-Policy', "sandbox; default-src 'none';");
-    } else if (delivery.isPdf) {
-      res.setHeader(
-        'Content-Security-Policy',
-        "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'"
-      );
-    }
-
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Type', delivery.contentType);
-    res.setHeader(
-      'Content-Disposition',
-      buildContentDisposition(delivery.disposition, record.originalName)
-    );
+    applyRawMediaHeaders(res, record, delivery, isEphemeral);
     res.sendFile(filePath, { acceptRanges: true });
   } catch {
     res.status(500).send('Error serving file');
@@ -3097,8 +2926,10 @@ app.get('/d/:code', lookupRateLimiter, (req, res) => {
       res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
     }
 
-    record.downloads = (record.downloads || 0) + 1;
-    scheduleDatabaseSave(db);
+    if (req.method !== 'HEAD') {
+      record.downloads = (record.downloads || 0) + 1;
+      scheduleDatabaseSave(db);
+    }
 
     res.download(filePath, record.originalName);
   } catch {
@@ -3119,25 +2950,13 @@ app.get(['/s/:code', '/s/:code.:ext'], lookupRateLimiter, (req, res) => {
   try {
     const rawTemplate = SHARE_HTML_TEMPLATE;
     const baseUrl = resolveBaseUrl(req);
-    const ext = getSafeExtension(record.originalName);
     const delivery = resolveRawMediaDelivery(record);
     const title = `${record.originalName} — sera.drop`;
     const fileSizeFormatted = formatBytes(record.size);
     const description = `${record.originalName} (${fileSizeFormatted}) — shared on sera.drop`;
     const pageUrl = `${baseUrl}/s/${record.code}`;
-
-    let directFileExt = ext;
-    if (!directFileExt) {
-      if (delivery.category === 'video') {
-        directFileExt = delivery.contentType === 'video/webm' ? '.webm' : '.mp4';
-      } else if (delivery.category === 'audio') {
-        directFileExt = '.mp3';
-      } else if (delivery.category === 'image') {
-        directFileExt = '.png';
-      }
-    }
-
-    let directFilePath = `/files/${record.code}${directFileExt || ''}`;
+    const directFileExt = getDirectFileExt(record, delivery);
+    let directFilePath = `/files/${record.code}${directFileExt}`;
     let sigQuery = '';
     if (record.requireSignedUrl) {
       const sigCheck = verifySecureLink(`/s/${record.code}`, req.query.sig, req.query.expires);
@@ -3306,7 +3125,9 @@ app.use((err, req, res, next) => {
   if (res.headersSent) {
     return next(err);
   }
-  const status = err.statusCode || (err.code === 'LIMIT_FILE_SIZE' ? 413 : 500);
+  const status =
+    err.statusCode ||
+    (err.code === 'LIMIT_FILE_SIZE' ? 413 : err instanceof multer.MulterError ? 400 : 500);
   res.status(status).json({ error: err.message || 'Internal server error' });
 });
 
@@ -3329,6 +3150,7 @@ if (require.main === module) {
   process.on('SIGTERM', handleGracefulShutdown);
   process.on('beforeExit', flushPendingDatabaseSave);
   loadDatabase();
+  cleanupOrphanTempFiles();
   app.listen(PORT, () => {
     console.log(`sera.drop local server running at http://localhost:${PORT}`);
     startPublicTunnel();

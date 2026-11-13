@@ -19,7 +19,8 @@ process.env.OPERATOR_NAME = 'SERA Compliance Test GmbH';
 process.env.OPERATOR_ADDRESS = 'Friedrichstraße 100, 10117 Berlin, Germany';
 process.env.OPERATOR_EMAIL = 'compliance@sera-drop.test';
 
-const { app } = require('../server.js');
+const { app, computeSecureLinkSignature } = require('../server.js');
+const { isPrivateOrReservedIp } = require('../src/ip-safety');
 
 let server;
 let baseUrl;
@@ -1246,5 +1247,228 @@ describe('sera-drop Security & Legal Compliance Suite', () => {
     const body = await res.json();
     assert.match(body.reportId, /^rep_/);
     assert.equal(body.status, 'received');
+  });
+
+  it('does not increment download counters on HEAD /d/:code', async () => {
+    const upRes = await uploadMultipartFile({
+      filename: 'head-check.txt',
+      contentType: 'text/plain',
+      buffer: Buffer.from('head download counter check', 'utf8')
+    });
+    assert.equal(upRes.status, 201);
+    const upData = await upRes.json();
+
+    const headRes = await fetch(`${baseUrl}/d/${upData.code}`, { method: 'HEAD' });
+    assert.equal(headRes.status, 200);
+
+    const metaAfterHead = await fetch(`${baseUrl}/api/files/${upData.code}`);
+    assert.equal(metaAfterHead.status, 200);
+    const metaJson1 = await metaAfterHead.json();
+    assert.equal(metaJson1.downloads, 0);
+
+    const getRes = await fetch(`${baseUrl}/d/${upData.code}`);
+    assert.equal(getRes.status, 200);
+    await getRes.arrayBuffer();
+
+    const metaAfterGet = await fetch(`${baseUrl}/api/files/${upData.code}`);
+    assert.equal(metaAfterGet.status, 200);
+    const metaJson2 = await metaAfterGet.json();
+    assert.equal(metaJson2.downloads, 1);
+  });
+
+  it('rejects blocked executable extensions disguised with trailing dots or spaces', async () => {
+    const upDot = await uploadMultipartFile({
+      filename: 'payload.exe.',
+      contentType: 'text/plain',
+      buffer: Buffer.from('not real pe header', 'utf8')
+    });
+    assert.equal(upDot.status, 415);
+
+    const upSpace = await uploadMultipartFile({
+      filename: 'payload.ps1  ',
+      contentType: 'text/plain',
+      buffer: Buffer.from('Write-Host hi', 'utf8')
+    });
+    assert.equal(upSpace.status, 415);
+  });
+
+  it('prevents non-owner GET /api/files/:code from extending signed URL expiry', async () => {
+    const ownerCookie = `sera_cid=${'9'.repeat(64)}`;
+    const form = new FormData();
+    form.append('requireSignedUrl', 'true');
+    form.append('file', new Blob([Buffer.from('expiring signed doc', 'utf8')], { type: 'text/plain' }), 'cap.txt');
+
+    const upRes = await fetch(`${baseUrl}/api/upload`, {
+      method: 'POST',
+      headers: {
+        'X-Requested-With': 'sera.drop',
+        Cookie: ownerCookie
+      },
+      body: form
+    });
+    assert.equal(upRes.status, 201);
+    const upData = await upRes.json();
+
+    const shortDeadline = Math.floor(Date.now() / 1000) + 15;
+    const shortSig = computeSecureLinkSignature(`/s/${upData.code}`, shortDeadline);
+    const nonOwnerRes = await fetch(
+      `${baseUrl}/api/files/${upData.code}?sig=${encodeURIComponent(shortSig)}&expires=${shortDeadline}`
+    );
+    assert.equal(nonOwnerRes.status, 200);
+    const nonOwnerMeta = await nonOwnerRes.json();
+    assert.ok(nonOwnerMeta.signedExpires <= shortDeadline);
+  });
+
+  it('rejects malformed Content-Length headers in preUploadGuard and sets security headers on proxy responses', async () => {
+    const badStatus = await new Promise((resolve, reject) => {
+      const target = new URL(baseUrl);
+      const req = http.request(
+        {
+          hostname: target.hostname,
+          port: target.port,
+          path: '/api/url-upload',
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'sera.drop',
+            'Content-Length': 'invalid-len'
+          }
+        },
+        (res) => {
+          res.resume();
+          res.on('end', () => resolve(res.statusCode));
+        }
+      );
+      req.on('error', reject);
+      req.write('{"url":"http://example.com"}');
+      req.end();
+    });
+    assert.equal(badStatus, 400);
+
+    const mockUpstream = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('ok');
+    });
+    await new Promise((resolve) => mockUpstream.listen(0, '127.0.0.1', resolve));
+    const upstreamPort = mockUpstream.address().port;
+    process.env.UPSTREAM_URL = `http://127.0.0.1:${upstreamPort}`;
+    try {
+      const proxied = await fetch(`${baseUrl}/proxied-headers-check`);
+      assert.equal(proxied.status, 200);
+      assert.equal(proxied.headers.get('x-content-type-options'), 'nosniff');
+      assert.equal(proxied.headers.get('x-frame-options'), 'SAMEORIGIN');
+    } finally {
+      delete process.env.UPSTREAM_URL;
+      await new Promise((resolve) => mockUpstream.close(resolve));
+    }
+  });
+
+  it('blocks extended IPv6 SSRF ranges including NAT64 local-use and malformed addresses', () => {
+    assert.equal(isPrivateOrReservedIp('64:ff9b:1::1'), true);
+    assert.equal(isPrivateOrReservedIp('2001:10::1'), true);
+    assert.equal(isPrivateOrReservedIp('2001::1::1'), true);
+    assert.equal(isPrivateOrReservedIp('[::ffff:127.0.0.1]'), true);
+    assert.equal(isPrivateOrReservedIp('00ff::1'), true);
+    assert.equal(isPrivateOrReservedIp('::8.8.8.8'), true);
+    assert.equal(isPrivateOrReservedIp('2001:1::1'), true);
+    assert.equal(isPrivateOrReservedIp('3fff::1'), true);
+    assert.equal(isPrivateOrReservedIp('5f00::1'), true);
+    assert.equal(isPrivateOrReservedIp('::ffff:8.8.8.8'), false);
+    assert.equal(isPrivateOrReservedIp('93.184.216.34'), false);
+    assert.equal(isPrivateOrReservedIp('2606:2800:220:1:248:1893:25c8:1946'), false);
+  });
+
+  it('rejects overlong >240-char executables and Windows backslash blocked filenames with 415', async () => {
+    const longExeName = `${'a'.repeat(250)}.exe`;
+    const longRes = await uploadMultipartFile({
+      filename: longExeName,
+      contentType: 'application/octet-stream',
+      buffer: Buffer.from('not-pe-plain-text')
+    });
+    assert.equal(longRes.status, 415);
+
+    const backslashRes = await uploadMultipartFile({
+      filename: 'C:\\evil\\payload.ps1',
+      contentType: 'text/plain',
+      buffer: Buffer.from('Write-Host 1')
+    });
+    assert.equal(backslashRes.status, 415);
+  });
+
+  it('enforces sandbox CSP and nosniff on HEAD /raw/:code and returns 404 when backing file is deleted', async () => {
+    const beforeFiles = new Set(fs.readdirSync(testUploadsDir));
+    const uploadRes = await uploadMultipartFile({
+      filename: 'head-check.txt',
+      contentType: 'text/plain',
+      buffer: Buffer.from(`unique-head-check-${Date.now()}`)
+    });
+    assert.equal(uploadRes.status, 201);
+    const uploaded = await uploadRes.json();
+    const afterFiles = fs.readdirSync(testUploadsDir);
+    const createdFiles = afterFiles.filter((name) => !beforeFiles.has(name) && !name.endsWith('.json'));
+    assert.equal(createdFiles.length, 1);
+
+    const headRes = await fetch(`${baseUrl}/raw/${uploaded.code}`, { method: 'HEAD' });
+    assert.equal(headRes.status, 200);
+    assert.equal(headRes.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(headRes.headers.get('content-security-policy'), "sandbox; default-src 'none';");
+
+    fs.unlinkSync(path.join(testUploadsDir, createdFiles[0]));
+    const missingHeadRes = await fetch(`${baseUrl}/raw/${uploaded.code}`, { method: 'HEAD' });
+    assert.equal(missingHeadRes.status, 404);
+  });
+
+  it('rejects albums exceeding 500 file entries with 400 and enforces Vary/proxy header sanitization', async () => {
+    const tooManyCodes = Array.from({ length: 501 }, (_, idx) => `c${idx}`);
+    const albumRes = await fetch(`${baseUrl}/api/albums`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'sera.drop'
+      },
+      body: JSON.stringify({ title: 'Oversized Album', files: tooManyCodes })
+    });
+    assert.equal(albumRes.status, 400);
+
+    const optionsRes = await fetch(`${baseUrl}/api/upload`, {
+      method: 'OPTIONS',
+      headers: { Origin: baseUrl }
+    });
+    const varyHeader = optionsRes.headers.get('vary') || '';
+    assert.ok(varyHeader.split(',').some((v) => v.trim().toLowerCase() === 'origin'));
+
+    let capturedHeaders = null;
+    const mockUpstream = http.createServer((req, res) => {
+      capturedHeaders = req.headers;
+      res.writeHead(200, {
+        'Content-Type': 'text/plain',
+        'X-Content-Type-Options': 'invalid-override',
+        'X-Frame-Options': 'ALLOWALL'
+      });
+      res.end('ok');
+    });
+    await new Promise((resolve) => mockUpstream.listen(0, '127.0.0.1', resolve));
+    const upstreamPort = mockUpstream.address().port;
+    process.env.UPSTREAM_URL = `http://127.0.0.1:${upstreamPort}`;
+    try {
+      const proxied = await fetch(`${baseUrl}/proxy-strip-check`, {
+        headers: {
+          'X-Forwarded-For': '198.51.100.77, 198.51.100.99',
+          'CF-Connecting-IP': '198.51.100.88',
+          'True-Client-IP': '198.51.100.66',
+          Forwarded: 'for=198.51.100.55'
+        }
+      });
+      assert.equal(proxied.status, 200);
+      assert.equal(capturedHeaders['cf-connecting-ip'], undefined);
+      assert.equal(capturedHeaders['true-client-ip'], undefined);
+      assert.equal(capturedHeaders['forwarded'], undefined);
+      assert.ok(!String(capturedHeaders['x-forwarded-for'] || '').includes('198.51.100.77'));
+      assert.equal(proxied.headers.get('x-content-type-options'), 'nosniff');
+      assert.equal(proxied.headers.get('x-frame-options'), 'SAMEORIGIN');
+    } finally {
+      delete process.env.UPSTREAM_URL;
+      await new Promise((resolve) => mockUpstream.close(resolve));
+    }
   });
 });

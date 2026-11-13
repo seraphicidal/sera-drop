@@ -1,86 +1,12 @@
 (function () {
   const albumMain = document.getElementById('albumMain');
-  const toast = document.getElementById('toast');
-  const inlineError = document.getElementById('inlineError');
-  const inlineErrorText = document.getElementById('inlineErrorText');
-  const inlineErrorDismiss = document.getElementById('inlineErrorDismiss');
 
-  let toastTimer = null;
-
-  function showToast(msg) {
-    if (!toast) return;
-    toast.textContent = msg;
-    toast.classList.add('show');
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
-  }
-
-  function showInlineError(msg) {
-    if (!inlineError || !inlineErrorText) return;
-    inlineErrorText.textContent = msg;
-    inlineError.classList.add('active');
-  }
-
-  function clearInlineError() {
-    if (!inlineError || !inlineErrorText) return;
-    inlineErrorText.textContent = '';
-    inlineError.classList.remove('active');
-  }
-
-  if (inlineErrorDismiss) {
-    inlineErrorDismiss.addEventListener('click', clearInlineError);
-  }
+  const { showToast, showInlineError, copyText } = window.SeraCommon.initUiFeedback();
+  const { formatBytes, escapeHtml, sanitizeUrl } = window.SeraCommon;
 
   const reportModalCtrl = window.SeraQR
     ? window.SeraQR.initReportModal({ showToast, showInlineError })
     : { openReportModal: function () {} };
-
-  function formatBytes(bytes) {
-    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  }
-
-  function escapeHtml(str) {
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
-
-  async function copyText(text, label = 'Link') {
-    try {
-      await navigator.clipboard.writeText(text);
-      showToast(`${label} copied`);
-    } catch {
-      const input = document.createElement('input');
-      input.value = text;
-      document.body.appendChild(input);
-      input.select();
-      document.execCommand('copy');
-      document.body.removeChild(input);
-      showToast(`${label} copied`);
-    }
-  }
-
-  function sanitizeUrl(url) {
-    if (typeof url !== 'string') return '#';
-    const trimmed = url.trim();
-    if (trimmed.startsWith('/') && !trimmed.startsWith('//') && !trimmed.startsWith('/\\')) {
-      return trimmed;
-    }
-    try {
-      const parsed = new URL(trimmed, window.location.origin);
-      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-        return parsed.href;
-      }
-    } catch {}
-    return '#';
-  }
 
   async function loadAlbum() {
     const parts = window.location.pathname.split('/').filter(Boolean);
@@ -174,14 +100,15 @@
       `;
 
       const albumQrImg = document.getElementById('albumQrImg');
-      if (window.SeraQR) {
-        window.SeraQR.applyQrToElements(
-          album.albumUrl || window.location.href,
-          albumQrImg,
-          null,
-          `qr-album-${album.short}.png`
-        );
-      } else if (album.qrCodeDataUrl) {
+      const qrRendered = window.SeraQR
+        ? window.SeraQR.applyQrToElements(
+            album.albumUrl || window.location.href,
+            albumQrImg,
+            null,
+            `qr-album-${album.short}.png`
+          )
+        : false;
+      if (!qrRendered && album.qrCodeDataUrl) {
         albumQrImg.src = album.qrCodeDataUrl;
       }
 
@@ -199,7 +126,12 @@
       document.querySelectorAll('.copy-direct').forEach((btn) => {
         btn.addEventListener('click', () => copyText(btn.dataset.url, 'Direct link'));
         btn.addEventListener('auxclick', (e) => {
-          if (e.button === 1) window.open(btn.dataset.url, '_blank', 'noopener,noreferrer');
+          if (e.button === 1) {
+            const safeUrl = sanitizeUrl(btn.dataset.url);
+            if (safeUrl !== '#') {
+              window.open(safeUrl, '_blank', 'noopener,noreferrer');
+            }
+          }
         });
       });
     } catch (err) {
