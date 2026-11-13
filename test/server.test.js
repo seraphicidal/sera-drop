@@ -845,7 +845,7 @@ describe('sera-drop Security & Legal Compliance Suite', () => {
     assert.equal(unauthMetaRes.status, 403);
   });
 
-  it('hides deduplication metadata from public unauthenticated callers (FINDING-11)', async () => {
+  it('hides deduplication metadata from HTTP responses and enforces client quota on deduplicated uploads (FINDING-11)', async () => {
     const ownerCookie = `sera_cid=${'f'.repeat(64)}`;
     const textBuffer = Buffer.from('dedup oracle test string payload 1234567890', 'utf8');
 
@@ -863,7 +863,7 @@ describe('sera-drop Security & Legal Compliance Suite', () => {
     });
     assert.equal(firstUp.status, 201);
     const firstData = await firstUp.json();
-    assert.equal(firstData.deduplicated, false);
+    assert.equal(firstData.deduplicated, undefined);
 
     const secondUp = await fetch(`${baseUrl}/api/upload`, {
       method: 'POST',
@@ -879,7 +879,7 @@ describe('sera-drop Security & Legal Compliance Suite', () => {
     });
     assert.equal(secondUp.status, 201);
     const secondData = await secondUp.json();
-    assert.equal(secondData.deduplicated, true);
+    assert.equal(secondData.deduplicated, undefined);
 
     const strangerRes = await fetch(`${baseUrl}/api/files/${secondData.code}`, {
       headers: {
@@ -888,7 +888,7 @@ describe('sera-drop Security & Legal Compliance Suite', () => {
     });
     assert.equal(strangerRes.status, 200);
     const strangerData = await strangerRes.json();
-    assert.equal(strangerData.deduplicated, false);
+    assert.equal(strangerData.deduplicated, undefined);
   });
 
   it('enforces strict Cache-Control and HSTS security headers (FINDING-10 & Item A3)', async () => {
@@ -1155,5 +1155,96 @@ describe('sera-drop Security & Legal Compliance Suite', () => {
       headers: { Cookie: 'sera_cid=%E0%A4%A; broken=%ZZ' }
     });
     assert.equal(malformedCookieRes.status, 200);
+  });
+
+  it('blocks protocol-relative GET //evil.example/ open proxy attempts when UPSTREAM_URL is set', async () => {
+    const mockUpstream = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, url: req.url }));
+    });
+    await new Promise((resolve) => mockUpstream.listen(0, '127.0.0.1', resolve));
+    const mockPort = mockUpstream.address().port;
+    process.env.UPSTREAM_URL = `http://127.0.0.1:${mockPort}`;
+
+    try {
+      const rawStatus = await new Promise((resolve, reject) => {
+        const parsedBase = new URL(baseUrl);
+        const req = http.request(
+          {
+            hostname: parsedBase.hostname,
+            port: parsedBase.port,
+            method: 'GET',
+            path: '//evil.example/pwn'
+          },
+          (res) => {
+            res.resume();
+            res.on('end', () => resolve(res.statusCode));
+          }
+        );
+        req.on('error', reject);
+        req.end();
+      });
+      assert.equal(rawStatus, 400);
+    } finally {
+      delete process.env.UPSTREAM_URL;
+      await new Promise((resolve) => mockUpstream.close(resolve));
+    }
+  });
+
+  it('renders signed OpenGraph media URLs without expires=NaN and allows owner cookie access to signed GET /api/files/:code', async () => {
+    const ownerCookie = `sera_cid=${'7'.repeat(64)}`;
+    const validPng = Buffer.from(
+      '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082',
+      'hex'
+    );
+    const form = new FormData();
+    form.append('requireSignedUrl', 'true');
+    form.append('file', new Blob([validPng], { type: 'image/png' }), 'signed-og-test.png');
+
+    const upRes = await fetch(`${baseUrl}/api/upload`, {
+      method: 'POST',
+      headers: {
+        'X-Requested-With': 'sera.drop',
+        Cookie: ownerCookie
+      },
+      body: form
+    });
+    assert.equal(upRes.status, 201);
+    const upData = await upRes.json();
+
+    const shareRes = await fetch(upData.shortUrl);
+    assert.equal(shareRes.status, 200);
+    const shareHtml = await shareRes.text();
+    assert.ok(!shareHtml.includes('expires=NaN'), 'OpenGraph URLs must not contain expires=NaN');
+    assert.match(shareHtml, /property="og:image" content="[^"]+expires=\d+"/);
+
+    const ownerMetaRes = await fetch(`${baseUrl}/api/files/${upData.code}`, {
+      headers: { Cookie: ownerCookie }
+    });
+    assert.equal(ownerMetaRes.status, 200);
+    const ownerMeta = await ownerMetaRes.json();
+    assert.equal(ownerMeta.code, upData.code);
+  });
+
+  it('accepts anonymous abuse reports with empty notifierName and notifierEmail via POST /api/report', async () => {
+    const res = await fetch(`${baseUrl}/api/report`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'sera.drop'
+      },
+      body: JSON.stringify({
+        targetUrl: `${baseUrl}/s/anon1234`,
+        category: 'malware',
+        explanation: 'Anonymous report of suspected malicious archive.',
+        notifierName: '',
+        notifierEmail: '',
+        goodFaithConfirmed: true
+      })
+    });
+    assert.equal(res.status, 201);
+    const body = await res.json();
+    assert.match(body.reportId, /^rep_/);
+    assert.equal(body.status, 'received');
   });
 });

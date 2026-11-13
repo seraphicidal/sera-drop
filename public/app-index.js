@@ -87,9 +87,9 @@
     : { openReportModal: function () {} };
 
   function formatBytes(bytes) {
-    if (!bytes || bytes <= 0) return '0 B';
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
     const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
@@ -619,7 +619,7 @@
     resultFileMeta.innerHTML = metaParts.join('');
     resultShortUrl.value = item.shortUrl;
     resultDirectUrl.value = item.directUrl || item.rawUrl;
-    openSharePageBtn.href = `/s/${encodeURIComponent(item.code)}`;
+    openSharePageBtn.href = item.shortUrl || ('/s/' + encodeURIComponent(item.code));
 
     const qrRendered = window.SeraQR
       ? window.SeraQR.applyQrToElements(
@@ -776,6 +776,7 @@
         const rawBadge = getExtBadge(f.originalName);
         const safeBadge = escapeHtml(rawBadge);
         const safeCode = escapeHtml(f.code);
+        const safeShareHref = escapeHtml(f.shortUrl || ('/s/' + encodeURIComponent(f.code)));
         const isExec = execExts.has(rawBadge);
         const warnTag = isExec ? `<span class="tag-warn">Executable</span>` : '';
         const dedupeTag = f.deduplicated ? `<span class="tag-mono">Dedupe</span>` : '';
@@ -800,14 +801,14 @@
                 <span>${escapeHtml(formatBytes(f.size))}</span>
                 <span>${Number(f.downloads) || 0} dl</span>
                 <span>${escapeHtml(formatDate(f.createdAt))}</span>
-                <a href="/s/${safeCode}" class="file-code-link">/s/${safeCode}</a>
+                <a href="${safeShareHref}" class="file-code-link">/s/${safeCode}</a>
               </div>
             </div>
           </div>
           <div class="file-actions">
             <button type="button" class="btn btn-secondary btn-sm copy-btn">Copy</button>
             <button type="button" class="btn btn-secondary btn-sm copy-direct-btn">Direct</button>
-            <a href="/s/${safeCode}" class="btn btn-secondary btn-sm">Preview</a>
+            <a href="${safeShareHref}" class="btn btn-secondary btn-sm">Preview</a>
             <button type="button" class="btn btn-secondary btn-sm report-file-btn">Report</button>
             <button type="button" class="btn btn-danger btn-sm delete-btn">Delete</button>
           </div>
